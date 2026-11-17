@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs/promises';
+const css=await fs.readFile(new URL('../src/deck/tablet-layout.css',import.meta.url),'utf8');
+test('Safari type does not shrink and key labels use a reserved two-line slot',()=>{assert.match(css,/flex-shrink:0/);assert.match(css,/-webkit-line-clamp:2/);assert.match(css,/min-height:2.6em;max-height:2.6em/);assert.match(css,/-webkit-text-size-adjust:100%/);});
+test('key size is square and independent of content in every layout',()=>{assert.match(css,/aspect-ratio:1;min-height:0;height:auto;contain:size;overflow:hidden/);assert.doesNotMatch(css,/aspect-ratio:auto|minmax\(132px,auto\)|min-height:132px/);});
+test('served HTML and rebuild include tablet patch',async()=>{const html=await fs.readFile(new URL('../src/deck/index.html',import.meta.url),'utf8');const builder=await fs.readFile(new URL('../scripts/build/apply-mk2.mjs',import.meta.url),'utf8');assert.ok(html.includes(css.trimEnd()));assert.match(builder,/tablet-layout.css/);});

@@ -1,0 +1,20 @@
+
+# Local compatibility rule, added 2026-11-09.
+# Observed Antigravity file-edit dialog: the footer now uses
+# "f full diff · ctrl+r Review" rather than "tab Amend".
+# Require the actual question, both choices, and the active dialog footer.
+[[rules]]
+id = "local_file_edit_review_prompt"
+state = "blocked"
+priority = 310
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+contains = [
+  "accept this file edit?",
+  "yes, accept this change",
+  "no, reject this change",
+  "navigate",
+  "f full diff",
+  "ctrl+r review",
+]
+line_regex = ['^\s*esc to cancel(?:\s|$)']

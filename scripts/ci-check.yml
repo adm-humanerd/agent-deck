@@ -1,0 +1,25 @@
+name: Portable source checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  portable:
+    name: Headless source checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: git diff --exit-code -- src/deck/index.html
+      - run: npm run test:portable
+      # No real GUI, WSL, ACL, receiver or login-service qualification is claimed.

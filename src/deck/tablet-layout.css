@@ -1,0 +1,45 @@
+/* iPad Air 3: stable 5 x 3 keys. Content must never resize a key. */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+.keys{grid-auto-rows:auto;align-items:start}
+.key,.network-bank .key{width:100%;aspect-ratio:1;min-height:0;height:auto;contain:size;overflow:hidden}
+.key>.agent-logo,.key>.key-symbol,.key>.number,.key>.key-name,.key>.key-detail{flex-shrink:0}
+.key .key-name,.key.option .key-name{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;white-space:normal;overflow:hidden;text-overflow:ellipsis;overflow-wrap:anywhere;word-break:break-word;max-width:100%;line-height:1.3;min-height:2.6em;max-height:2.6em}
+.key .key-detail{max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.25}
+.option-list li>span{min-width:0;overflow-wrap:anywhere;word-break:break-word}
+.bank-heading,.source-switch,.mode-switch{min-width:0}
+.bank-toolbar{flex-wrap:wrap}
+.request,.request-disclosure,.approval-question{min-width:0;max-width:100%}
+.request-disclosure summary{overflow-wrap:anywhere}
+@media(min-width:561px) and (max-width:1180px){
+ .app{padding:24px 20px}
+ .workspace{grid-template-columns:minmax(0,1fr) 272px;gap:24px}
+ .device{padding-left:25px;padding-right:25px}
+ .keys{gap:16px}
+ .key,.network-bank .key{padding:10px 6px 8px;gap:4px;border-width:4px}
+ .key.session{gap:4px}
+ .key .key-name,.key.option .key-name{font-size:12px}
+ .key .key-detail,.key.session .key-detail{font-size:10px}
+ .key .agent-logo{width:28px;height:26px}
+ .key .agent-logo svg{width:26px;height:26px}
+ .key .agent-logo.agy svg,.key .agent-logo.pi svg{width:34px;height:34px}
+ .key .key-symbol{width:24px;height:24px}
+ .key.option .number{font-size:24px;line-height:1;height:26px}
+ .device-brand{height:60px}
+ .inspector{padding-top:48px}
+}
+@media(min-width:561px) and (max-width:960px){
+ .workspace{grid-template-columns:minmax(0,1fr);gap:30px}
+ .inspector{padding-top:24px;grid-template-columns:minmax(150px,.65fr) minmax(0,1.35fr)}
+}
+@media(max-width:560px){
+ .key,.network-bank .key{padding:7px 4px 5px;gap:3px;border-width:4px}
+ .key.session{gap:3px}
+ .key .key-name,.key.option .key-name{font-size:11px;line-height:1.2;min-height:2.4em;max-height:2.4em}
+ .key .key-detail,.key.session .key-detail{font-size:9px;line-height:1.2}
+ .key .agent-logo,.key .key-symbol{width:22px;height:22px}
+ .key .agent-logo svg{width:22px;height:22px}
+ .key .agent-logo.agy svg,.key .agent-logo.pi svg{width:28px;height:28px}
+ .key.option .number{font-size:22px;line-height:1;height:22px}
+ .bank-heading{flex-wrap:wrap}
+ .topbar{flex-wrap:wrap}
+}

@@ -1,0 +1,27 @@
+# Local compatibility rules for active Antigravity dialogs.
+# Titles and diff availability vary between edit/create/review screens.
+# Require the active bottom key hints AND cancel footer, not transcript text.
+[[rules]]
+id = "local_file_review_footer_prompt"
+state = "blocked"
+priority = 315
+region = "bottom_non_empty_lines(2)"
+visible_blocker = true
+contains = ["navigate"]
+any = [
+  { contains = ["ctrl+r review"] },
+  { contains = ["f full diff"] },
+]
+line_regex = ['^\s*esc to cancel(?:\s|$)']
+
+# The upstream manifest documents this trust/confirmation footer, but its
+# heading-based rule misses captures where only the footer remains visible.
+# Do not match the slash menu (enter Select / tab Complete).
+[[rules]]
+id = "local_confirmation_footer_prompt"
+state = "blocked"
+priority = 305
+region = "bottom_non_empty_lines(2)"
+visible_blocker = true
+contains = ["navigate", "enter confirm"]
+line_regex = ['^\s*esc to cancel(?:\s|$)']

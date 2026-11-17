@@ -1,0 +1,19 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs/promises';import vm from 'node:vm';
+const source=await fs.readFile(new URL('../src/deck/deck-send.js',import.meta.url),'utf8');
+function fixture(overrides={}){
+ const agent={pane_id:'test:p1',ticket:'ticket-a',agent_status:'blocked',text:'1. Allow',label:'Agent'};
+ const sent=[],messages=[];let refreshes=0,renders=0;
+ const context=vm.createContext({DECK_KEY_ACTIONS:['enter','up','down','left','right','tab','esc'],sending:false,modal:false,deckLocal:false,cancelDeckInput(){},deckEditing:false,deckView:'herdr',demo:false,online:true,current:{agents:[agent]},renderSignature:'old',active:()=>agent,toast:x=>messages.push(x),api:async(url,data)=>sent.push({url,...data}),render:()=>renders++,refresh:async()=>refreshes++,...overrides});
+ vm.runInContext(source,context);
+ return {context,agent,sent,messages,run:(a=agent,key='enter')=>context.ask(a,key,key),refreshes:()=>refreshes,renders:()=>renders};
+}
+test('one tap sends one key directly without a modal',async()=>{const f=fixture();await f.run();assert.deepEqual(f.sent,[{url:'/api/respond',pane:'test:p1',ticket:'ticket-a',key:'enter'}]);assert.equal(f.context.modal,false);assert.equal(f.refreshes(),1);assert.equal(f.context.sending,false);});
+test('navigation and number keys remain separate single sends',async()=>{const f=fixture();await f.run(f.agent,'1');await f.run(f.agent,'tab');assert.deepEqual(f.sent.map(x=>x.key),['1','tab']);});
+test('rapid repeated taps are suppressed while sending',async()=>{let done;const sent=[];const f=fixture({api:async(url,data)=>{sent.push(data.key);await new Promise(r=>done=r);}});const first=f.run();await f.run();assert.equal(f.context.sending,true);assert.deepEqual(sent,['enter']);done();await first;assert.equal(f.context.sending,false);});
+for(const [name,overrides] of Object.entries({preview:{deckLocal:true},offline:{online:false},demo:{demo:true},editing:{deckEditing:true},modal:{modal:true},reason:{deckView:'reason'}}))test(name+' does not transmit',async()=>{const f=fixture(overrides);await f.run();assert.equal(f.sent.length,0);});
+test('changed selected request ticket blocks direct send',async()=>{const f=fixture();await f.run({...f.agent,ticket:'old-ticket'});assert.equal(f.sent.length,0);});
+test('working agent cannot receive a key',async()=>{const f=fixture();f.agent.agent_status='working';await f.run();assert.equal(f.sent.length,0);});
+test('missing ticket, text, target, error and invalid key never transmit',async()=>{for(const patch of [{ticket:''},{text:''},{pane_id:''},{error:'unreadable'}]){const f=fixture();Object.assign(f.agent,patch);await f.run();assert.equal(f.sent.length,0);}const f=fixture();await f.run(f.agent,'arbitrary command');assert.equal(f.sent.length,0);});
+test('bridge rejection is shown, unlocks and refreshes without retry',async()=>{const f=fixture({api:async()=>{throw Error('요청이 바뀌었습니다');}});await f.run();assert.ok(f.messages.some(x=>x.includes('요청이 바뀌었습니다')&&x.includes('자동 재전송하지 않습니다')));assert.equal(f.context.sending,false);assert.equal(f.refreshes(),1);});
+test('native view sends to native respond route',async()=>{let nativeRefreshed=0;const f=fixture({deckView:'native',refreshNative:async()=>nativeRefreshed++});await f.run();assert.deepEqual(f.sent,[{url:'/api/native/respond',id:'test:p1',ticket:'ticket-a',key:'enter'}]);assert.equal(nativeRefreshed,1);});
+test('generated HTML contains direct sender, no key-send dialog or orphan handlers',async()=>{const html=await fs.readFile(new URL('../src/deck/index.html',import.meta.url),'utf8');assert.ok(html.includes(source.trimEnd()));assert.doesNotMatch(html,/<dialog id="confirm"|function closeConfirm|\$\('send'\)|\$\('cancel'\)/);assert.match(html,/<dialog id="resetDialog"/);for(const script of html.matchAll(/<script>([\s\S]*?)<\/script>/g))new vm.Script(script[1]);});

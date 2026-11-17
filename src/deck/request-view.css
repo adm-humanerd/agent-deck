@@ -1,0 +1,9 @@
+.approval-question{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit;font-size:15px;font-weight:500;line-height:1.7;color:var(--text)}
+.request-caption{font-size:11px;line-height:1.6;color:var(--muted);margin-top:10px}
+.request .option-list{margin-top:16px;margin-bottom:16px}
+.request-disclosure{border-top:1px solid var(--line);color:var(--muted);font-size:12px}
+.request-disclosure summary{cursor:pointer;min-height:44px;display:flex;align-items:center;gap:8px;list-style:none}
+.request-disclosure summary::-webkit-details-marker{display:none}
+.request-disclosure summary:before{content:'▸';font-size:13px}
+.request-disclosure[open] summary:before{content:'▾'}
+.request-disclosure .terminal{background:#181b1e;padding:12px;border-radius:6px;max-height:320px;margin-bottom:12px;font-size:11px;line-height:1.7}
