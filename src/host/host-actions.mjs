@@ -3,8 +3,11 @@ import {stat,access} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {MAC_SYSTEM_ACTIONS, MAC_MODIFIER_KEYS, isValidMacHotkeyKey, buildMacHotkeyScript, resolveMacSystemCommand} from './mac-control.mjs';
 
 const CONTROL = /[\x00-\x1f\x7f]/;
+const FORBIDDEN_APP_URL_SCHEMES = new Set(['http:', 'https:', 'file:', 'javascript:', 'data:', 'vbscript:', 'blob:', 'about:']);
+const CHILD_ACTION_KINDS = new Set(['hostProcess', 'hostUrl', 'appUrl', 'macApp', 'macShortcut', 'macSystem', 'macHotkey']);
 const MAX_ACTIVE = 4;
 const MAX_HISTORY = 128;
 const DEFAULT_TIMEOUT = 30000;
@@ -49,6 +52,40 @@ export function validateAction(raw) {
     case 'keyCombo':
       object(raw, ['kind', 'targetRef', 'chord', 'qualifiedMapping']);
       return Object.freeze({kind: raw.kind, targetRef: text(raw.targetRef, 256), chord: text(raw.chord, 128), qualifiedMapping: text(raw.qualifiedMapping, 256)});
+    case 'appUrl': {
+      object(raw, ['kind', 'url']);
+      text(raw.url, 8192);
+      if (/\s/.test(raw.url) || /%(?:0[0-9a-f]|1[0-9a-f]|7f)/i.test(raw.url)) throw new TypeError('Invalid URL');
+      let url;
+      try { url = new URL(raw.url); } catch { throw new TypeError('Invalid URL'); }
+      if (!/^[a-z][a-z0-9+.-]{1,31}:$/.test(url.protocol) || FORBIDDEN_APP_URL_SCHEMES.has(url.protocol) || url.username || url.password) throw new TypeError('Invalid URL');
+      return Object.freeze({kind: raw.kind, url: url.href});
+    }
+    case 'macApp': {
+      object(raw, ['kind', 'appPath']);
+      text(raw.appPath, 1024);
+      if (!raw.appPath.startsWith('/') || raw.appPath.endsWith('/') || !raw.appPath.endsWith('.app') || raw.appPath.split('/').includes('..') || path.posix.basename(raw.appPath).length <= 4) throw new TypeError('Invalid macOS app path');
+      return Object.freeze({kind: raw.kind, appPath: raw.appPath});
+    }
+    case 'macShortcut': {
+      object(raw, ['kind', 'name']);
+      const name = text(raw.name, 256);
+      if (!name.trim().length) throw new TypeError('Invalid macOS shortcut name');
+      return Object.freeze({kind: raw.kind, name});
+    }
+    case 'macSystem': {
+      object(raw, ['kind', 'action']);
+      if (typeof raw.action !== 'string' || !MAC_SYSTEM_ACTIONS.includes(raw.action)) throw new TypeError('Invalid macOS system action');
+      return Object.freeze({kind: raw.kind, action: raw.action});
+    }
+    case 'macHotkey': {
+      object(raw, ['kind', 'key', 'modifiers']);
+      if (!isValidMacHotkeyKey(raw.key)) throw new TypeError('Invalid macOS hotkey key');
+      if (!Array.isArray(raw.modifiers) || raw.modifiers.length > MAC_MODIFIER_KEYS.length || new Set(raw.modifiers).size !== raw.modifiers.length || raw.modifiers.some(m => typeof m !== 'string' || !MAC_MODIFIER_KEYS.includes(m))) {
+        throw new TypeError('Invalid macOS hotkey modifiers');
+      }
+      return Object.freeze({kind: raw.kind, key: raw.key, modifiers: Object.freeze([...raw.modifiers])});
+    }
     default: throw new TypeError('Unknown action kind');
   }
 }
@@ -211,9 +248,21 @@ export function createHostDispatcher({platform = process.platform, spawnImpl = s
     active++;
     const receipt = () => ({runId: run.runId, state: run.state, completion});
     run.timer = setTimeout(() => {
-      if (action.kind === 'hostProcess' || action.kind === 'hostUrl') stop(run, 'timeout');
+      if (CHILD_ACTION_KINDS.has(action.kind)) stop(run, 'timeout');
       else finish(run, 'unknown');
     }, action.executionPolicy?.timeoutMs || DEFAULT_TIMEOUT);
+    async function dispatchUrl(urlString) {
+      await enterEffect(run, () => {
+        run.effectEntered = true;
+        if (platform === 'darwin') startChild(run, '/usr/bin/open', [urlString], {}, undefined, true);
+        else if (platform === 'win32') {
+          // URL travels on stdin as data; never in PowerShell source or parsed argv.
+          const script = '$ErrorActionPreference = "Stop"; $u = [Console]::In.ReadLine(); Start-Process -FilePath $u';
+          startChild(run, 'powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {}, urlString + '\n', true);
+        } else if (platform === 'linux') startChild(run, 'xdg-open', [urlString], {}, undefined, true);
+        else finish(run, 'blocked');
+      });
+    }
     if (action.kind === 'hostProcess') {
       try {
         const absolute = platform === 'win32' ? path.win32.isAbsolute(action.cwd) && /^[a-z]:[\\/]|^\\\\[^\\]+\\[^\\]+/i.test(action.cwd) : path.posix.isAbsolute(action.cwd);
@@ -229,16 +278,38 @@ export function createHostDispatcher({platform = process.platform, spawnImpl = s
       };
       const [command, args] = commands[action.shellKind];
       await enterEffect(run,()=>{run.effectEntered=true;startChild(run,command,args,{cwd:action.cwd});});
-    } else if (action.kind === 'hostUrl') {
-      await enterEffect(run,()=>{
-       run.effectEntered=true;
-       if (platform === 'darwin') startChild(run, '/usr/bin/open', [action.url], {}, undefined, true);
-       else if (platform === 'win32') {
-        // URL travels on stdin as data; never in PowerShell source or parsed argv.
-        const script = '$ErrorActionPreference = "Stop"; $u = [Console]::In.ReadLine(); Start-Process -FilePath $u';
-        startChild(run, 'powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {}, action.url + '\n', true);
-       } else if (platform === 'linux') startChild(run, 'xdg-open', [action.url], {}, undefined, true);
-       else finish(run, 'blocked');
+    } else if (action.kind === 'hostUrl' || action.kind === 'appUrl') {
+      await dispatchUrl(action.url);
+    } else if (action.kind === 'macApp') {
+      if (platform !== 'darwin') { finish(run, 'unavailable'); return receipt(); }
+      try {
+        if (!(await fsStat(action.appPath)).isDirectory()) { finish(run, 'blocked'); return receipt(); }
+      } catch { finish(run, 'blocked'); return receipt(); }
+      if (run.done || run.stopReason) { finish(run, run.stopReason || 'blocked'); return receipt(); }
+      await enterEffect(run, () => {
+        run.effectEntered = true;
+        startChild(run, '/usr/bin/open', ['-a', action.appPath], {}, undefined, true);
+      });
+    } else if (action.kind === 'macShortcut') {
+      if (platform !== 'darwin') { finish(run, 'unavailable'); return receipt(); }
+      await enterEffect(run, () => {
+        run.effectEntered = true;
+        startChild(run, '/usr/bin/shortcuts', ['run', action.name], {}, undefined, false);
+      });
+    } else if (action.kind === 'macSystem') {
+      if (platform !== 'darwin') { finish(run, 'unavailable'); return receipt(); }
+      const spec = resolveMacSystemCommand(action.action, env);
+      if (!spec) { finish(run, 'blocked'); return receipt(); }
+      await enterEffect(run, () => {
+        run.effectEntered = true;
+        startChild(run, spec.command, spec.args, {}, undefined, spec.handoff);
+      });
+    } else if (action.kind === 'macHotkey') {
+      if (platform !== 'darwin') { finish(run, 'unavailable'); return receipt(); }
+      const script = buildMacHotkeyScript(action.key, action.modifiers);
+      await enterEffect(run, () => {
+        run.effectEntered = true;
+        startChild(run, '/usr/bin/osascript', ['-e', script], {}, undefined, false);
       });
     } else {
       const adapter = receiverAdapter(action);
@@ -278,7 +349,14 @@ export function createHostDispatcher({platform = process.platform, spawnImpl = s
       const shellStates={};for(const [kind,command]of Object.entries(commands))shellStates[kind]=supported&&await executableAvailable(command)?'available':'unavailable';
       const shellKinds=Object.keys(shellStates).filter(kind=>shellStates[kind]==='available');
       const opener=platform==='darwin'?'/usr/bin/open':platform==='win32'?'powershell.exe':'xdg-open';
-      return {hostUrl: supported&&await executableAvailable(opener), hostProcess: shellKinds.length>0, shellKinds, shellStates, maxConcurrent: MAX_ACTIVE, maxTimeoutMs: 3600000, maxOutputBytes: 1048576, receivers: Object.keys(receivers).filter(key => typeof receivers[key]?.inspect === 'function' && typeof receivers[key]?.dispatch === 'function'), herdr: 'unavailable', windowsQualified: false};
+      const urlAvailable=supported&&await executableAvailable(opener);
+      let macTools=null;
+      if(platform==='darwin'){
+        const paths={open:'/usr/bin/open',osascript:'/usr/bin/osascript',shortcuts:'/usr/bin/shortcuts',sips:'/usr/bin/sips',plutil:'/usr/bin/plutil',screencapture:'/usr/sbin/screencapture',pmset:'/usr/bin/pmset'};
+        macTools={};
+        for(const [name,file]of Object.entries(paths))macTools[name]=await executableAvailable(file);
+      }
+      return {hostUrl: urlAvailable, appUrl: urlAvailable, hostProcess: shellKinds.length>0, macControl: platform==='darwin', macTools, shellKinds, shellStates, maxConcurrent: MAX_ACTIVE, maxTimeoutMs: 3600000, maxOutputBytes: 1048576, receivers: Object.keys(receivers).filter(key => typeof receivers[key]?.inspect === 'function' && typeof receivers[key]?.dispatch === 'function'), herdr: 'unavailable', windowsQualified: false};
     }
   };
 }

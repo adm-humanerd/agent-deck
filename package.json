@@ -10,7 +10,7 @@
     "start": "node server.mjs",
     "build": "node scripts/build/apply-mk2.mjs",
     "test": "node --test tests/*.test.mjs src/integrations/herdr-rules/file-review.test.mjs",
-    "test:portable": "node --test tests/deck-layout.test.mjs tests/custom-snapshot.test.mjs tests/deck-input.test.mjs tests/deck-send.test.mjs tests/deck-focus.test.mjs tests/runtime.test.mjs tests/install-service.test.mjs",
+    "test:portable": "node --test tests/deck-layout.test.mjs tests/custom-snapshot.test.mjs tests/deck-input.test.mjs tests/deck-send.test.mjs tests/deck-focus.test.mjs tests/runtime.test.mjs tests/install-service.test.mjs tests/mac-control.test.mjs",
     "service:prepare": "node scripts/install-service.mjs --prepare"
   },
   "devDependencies": {

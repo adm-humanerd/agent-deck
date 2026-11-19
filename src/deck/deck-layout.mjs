@@ -2,7 +2,7 @@
 export const DECK_SLOT_COUNT = 15;
 export const DECK_STORAGE_KEY = 'agentDeck.layouts.v2';
 export const DECK_KEY_ACTIONS = ['enter','up','down','left','right','tab','esc'];
-export const DECK_SYMBOLS = ['terminal','network','enter','up','down','left','right','tab','esc','refresh','context'];
+export const DECK_SYMBOLS = ['terminal','network','enter','up','down','left','right','tab','esc','refresh','context','app','shortcut','link','keyboard','volume-up','volume-down','volume-mute','media-play','media-next','media-prev','dark-mode','screenshot','lock','folder'];
 export function validatePresentation(value){
  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['label','symbol','color','asset'].includes(k)))throw Error('잘못된 키 모양입니다.');
  if(value.label!==undefined&&(typeof value.label!=='string'||value.label.length>48||/[\x00-\x1f\x7f]/.test(value.label)))throw Error('키 이름은 최대 48자입니다.');

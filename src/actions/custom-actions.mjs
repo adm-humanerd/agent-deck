@@ -2,10 +2,11 @@ import {randomBytes} from 'node:crypto';
 import {localManagement,readLayoutBody,layoutError} from '../deck/shared-layout.mjs';
 import {projectSnapshot} from './custom-snapshot.mjs';
 import {readImageBody,assetIdValid} from './deck-assets.mjs';
+import {createMacCatalog} from '../host/mac-control.mjs';
 
 const strict=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join(',')===[...keys].sort().join(',');
 const opaque=()=>randomBytes(32).toString('hex');
-export function createCustomHandler({store,assets,dispatcher,auth,authority,admitAuthority,port=43187,now=Date.now}){
+export function createCustomHandler({store,assets,dispatcher,macCatalog=createMacCatalog(),auth,authority,admitAuthority,port=43187,now=Date.now}){
  const contexts=new Map(),runs=new Map();
  store.subscribe?.(revision=>{contexts.clear();for(const [id,run]of runs)if(run.revision!==revision)Promise.resolve(dispatcher.cancel(id)).catch(()=>{});});
  const send=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data));};
@@ -35,6 +36,18 @@ export function createCustomHandler({store,assets,dispatcher,auth,authority,admi
     const bytes=await assets.read(id);res.writeHead(200,{'Content-Type':'image/webp','Content-Length':bytes.length,'Content-Disposition':'inline'});res.end(bytes);return true;
    }
    if(route==='/api/actions/capabilities'&&req.method==='GET'){if(!local)throw layoutError(403,'수신기 정보는 PC 전용입니다.');send(res,200,await dispatcher.capabilities());return true;}
+   if(route==='/api/actions/mac-catalog'&&req.method==='GET'){
+    if(!local)throw layoutError(403,'macOS 앱·단축어 목록은 PC localhost에서만 조회할 수 있습니다.');
+    const force=new URL(req.url,'http://localhost').searchParams.get('refresh')==='1';
+    send(res,200,await macCatalog.getCatalog({force}));return true;
+   }
+   if(route==='/api/actions/mac-app-icon'&&req.method==='POST'){
+    if(!local)throw layoutError(403,'앱 아이콘 추출은 PC localhost에서만 가능합니다.');
+    const data=await readLayoutBody(req);
+    if(!strict(data,['appPath'])||typeof data.appPath!=='string'||!data.appPath.length||data.appPath.length>1024)throw layoutError(400,'유효한 앱 경로가 필요합니다.');
+    const png=await macCatalog.extractAppIconPng(data.appPath);
+    send(res,201,await assets.stage(png));return true;
+   }
    if(route==='/api/actions/runs'&&req.method==='GET'){
     if(!local)throw layoutError(403,'실행 출력은 PC 전용입니다.');
     send(res,200,[...runs].map(([id,run])=>({actionId:run.actionId,...dispatcher.status(id)})).filter(run=>run.runId));return true;
