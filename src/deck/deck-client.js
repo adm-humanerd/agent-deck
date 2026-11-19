@@ -75,27 +75,68 @@ function setDeckAccess(info){
 const layoutStatus=el('span');layoutStatus.id='layoutStatus';layoutStatus.setAttribute('role','status');
 const importLayout=el('button','이 브라우저 배치 가져오기');importLayout.className='deck-tool';importLayout.id='importLayout';
 const initializeLayout=el('button','서버 기본 배치 사용');initializeLayout.className='deck-tool';initializeLayout.id='initializeLayout';
-const reloadLayout=el('button','초안 버리고 서버 다시 읽기');reloadLayout.className='deck-tool';reloadLayout.id='reloadLayout';reloadLayout.onclick=()=>{if(!deckLocal||layoutSaving)return;cancelDeckInput();deckCandidate=null;deckEditing=false;closeKeyEditor();loadSharedLayouts(true);};
+const reloadLayout=el('button','서버 다시 읽기');reloadLayout.className='deck-tool';reloadLayout.id='reloadLayout';reloadLayout.onclick=()=>{if(!deckLocal||layoutSaving)return;cancelDeckInput();deckCandidate=null;deckEditing=false;closeKeyEditor();loadSharedLayouts(true);};
 $('deckLayoutToolbar').append(importLayout,initializeLayout,reloadLayout,layoutStatus);
 const saveCandidate=el('button','배치 초안 저장');saveCandidate.id='saveCandidate';saveCandidate.className='deck-tool';
 saveCandidate.onclick=async()=>{if(!canEditDeck()||!deckCandidate)return;await persistDeckLayouts(deckCandidate.layouts,false,deckCandidate);};
 const graphStatus=el('p');graphStatus.id='graphStatus';graphStatus.setAttribute('role','status');
 const connectionPlan=el('select');connectionPlan.id='connectionPlan';connectionPlan.multiple=true;connectionPlan.setAttribute('aria-label','현재 페이지에 직접 준비할 연결');
 connectionPlan.onchange=()=>{selectedConnections=selectedConnections.filter(c=>c.from!==deckProfile).concat([...connectionPlan.selectedOptions].map(o=>({from:deckProfile,...JSON.parse(o.value)})));syncDeckLayoutToolbar();};
-$('deckLayoutToolbar').append(saveCandidate,el('label','현재 페이지에 준비할 연결 (복수 선택 가능)'),connectionPlan,graphStatus);
+const connectionLabel=el('label','이동 키 연결 점검 (복수 선택)');connectionLabel.htmlFor='connectionPlan';
+$('deckLayoutToolbar').append(saveCandidate,connectionLabel,connectionPlan,graphStatus);
+function syncEditorEmpty(){
+ const empty=$('editorEmpty');
+ if(!empty||!$('editorEmptyTitle'))return;
+ $('editorEmptyTitle').textContent=deckEditing?'바꿀 키를 선택하세요':'키 편집 시작하기';
+ $('editorEmptyDesc').textContent=deckEditing?'왼쪽 덱 미리보기에서 키(01–15)를 누르면 오른쪽에 설정이 열립니다. 편집 중에는 명령이 실행되지 않습니다.':'PC에서 각 키의 동작을 설정하면 연결된 기기에 바로 반영됩니다.';
+ $('startDeckEditing').hidden=deckEditing;
+ $('editorGuideList').hidden=deckEditing;
+}
 function mountLocalEditor(){
  if($('editorPages'))return;
  const workspace=document.querySelector('.workspace'),toolbar=$('deckLayoutToolbar');
+ const pagesSection=el('div',undefined,'sidebar-section sidebar-pages');
  const title=el('h2','키 페이지');title.id='editorPagesTitle';
  const pages=el('nav');pages.id='editorPages';pages.setAttribute('aria-label','키 페이지 목록');
- toolbar.prepend(title,pages);workspace.prepend(toolbar);
+ const pageActions=el('div',undefined,'sidebar-page-actions');pageActions.append($('addDeckPage'),$('resetDeck'));
+ pagesSection.append(title,pages,pageActions);
+ const syncSection=el('div',undefined,'sidebar-section sidebar-sync');
+ const syncTitle=el('h3','저장 · 동기화','sidebar-heading');
+ syncSection.append(syncTitle,layoutStatus,saveCandidate,importLayout,initializeLayout,reloadLayout);
+ const navSection=el('div',undefined,'sidebar-section sidebar-nav-check');
+ navSection.append(connectionLabel,connectionPlan,graphStatus);
+ toolbar.prepend(pagesSection);
+ toolbar.append(syncSection,navSection);
+ workspace.prepend(toolbar);
  const settings=el('aside');settings.id='editorSettings';settings.setAttribute('aria-label','선택 키 설정');
- const empty=el('div');empty.id='editorEmpty';empty.append(el('h2','키 기능 변경'),el('p','키 편집을 켜고 미리보기에서 바꿀 키를 선택하세요.','hint'));
+ const empty=el('div');empty.id='editorEmpty';
+ const emptyTitle=el('h2','키 편집 시작하기');emptyTitle.id='editorEmptyTitle';
+ const emptyDesc=el('p','','hint');emptyDesc.id='editorEmptyDesc';
+ const startBtn=el('button','키 편집 시작','action primary editor-start-btn');startBtn.id='startDeckEditing';startBtn.type='button';startBtn.onclick=()=>$('editDeck').click();
+ const guideList=el('dl',undefined,'editor-guide-list');guideList.id='editorGuideList';
+ for(const [term,desc]of [['macOS 앱 · 단축어','앱 실행과 아이콘 자동 추출, Shortcuts 실행'],['시스템 · 단축키','볼륨·미디어·화면 제어 12종, 전역 단축키(⌘/⇧/⌥/⌃)'],['앱 URL · 에이전트','Raycast·Obsidian 열기, Herdr 세션·선택지·셸 스크립트']]){
+  const item=el('div');item.append(el('dt',term),el('dd',desc));guideList.append(item);
+ }
+ empty.append(emptyTitle,emptyDesc,startBtn,guideList);
  settings.append(empty,$('keyEditor'));workspace.append(settings);
- const heading=el('div',undefined,'editor-preview-heading');heading.append(el('h2','덱 미리보기'),$('editDeck'),$('showDeckRequest'));
+ const modeBadge=el('span','미리보기','editor-mode-badge');modeBadge.id='editorModeBadge';
+ const heading=el('div',undefined,'editor-preview-heading');heading.append(el('h2','덱 미리보기'),modeBadge,$('editDeck'),$('showDeckRequest'));
  document.querySelector('.bank-column').prepend(heading);
- $('keyEditor').querySelector('.hint').textContent='기능은 이 키에만 적용됩니다. 편집 중에는 에이전트에 입력을 보내지 않습니다.';
+ $('deckEditHint').textContent='바꿀 키를 누르세요. 편집 중에는 에이전트나 맥으로 명령을 보내지 않습니다.';
+ const keyEditor=$('keyEditor');
+ keyEditor.querySelector('.hint').textContent='이 키에만 적용됩니다. 저장 전에는 실행되지 않습니다.';
+ const previewCard=el('div',undefined,'key-preview-card');previewCard.id='keyPreviewCard';
+ const previewTile=el('div',undefined,'key-preview-tile');previewTile.id='keyPreviewTile';
+ const previewMeta=el('div',undefined,'key-preview-meta');
+ const previewName=el('strong','빈 키');previewName.id='keyPreviewName';
+ const previewSub=el('span','기본 기능');previewSub.id='keyPreviewSub';
+ previewMeta.append(previewName,previewSub);previewCard.append(previewTile,previewMeta);
+ const assignmentLabel=document.querySelector('label[for="keyAssignment"]');
+ if(assignmentLabel){assignmentLabel.textContent='기본 기능 (에이전트 · 페이지 · 응답)';keyEditor.insertBefore(previewCard,assignmentLabel);}
+ const overrideHint=el('p','아래 사용자 동작이 선택되어 기본 기능 대신 실행됩니다.','override-hint');overrideHint.id='keyAssignmentOverrideHint';overrideHint.hidden=true;
+ $('keyAssignment').after(overrideHint);
  mountCustomInspector();
+ syncEditorEmpty();
 }
 importLayout.onclick=async()=>{if(layoutInitialized||!canEditDeck(true))return;try{const raw=legacyDeckLayout();if(!raw)throw Error('가져올 배치가 없습니다.');const next=validateDeckLayouts(JSON.parse(raw));if(await persistDeckLayouts(next,true))layoutMessage('기존 배치를 서버에 가져왔습니다. 브라우저 원본은 보존됩니다.');}catch(error){layoutMessage('가져오기 실패: '+error.message);}};
 initializeLayout.onclick=()=>{if(!canEditDeck(true)||layoutInitialized)return;persistDeckLayouts(deckLayouts,true);};
@@ -111,17 +152,22 @@ function syncDeckLayoutToolbar(){
  const planSignature=JSON.stringify([deckProfile,layouts.map(p=>[p.id,p.name])]);
  if(connectionPlan.dataset.signature!==planSignature){connectionPlan.replaceChildren();for(const [name,action] of [['전체 세션',{type:'sessions'}],...layouts.filter(p=>p.id!==deckProfile).map(p=>[p.name+' 페이지',{type:'page',page:p.id}])]){const option=el('option',name);option.value=JSON.stringify(action);option.selected=selectedConnections.some(c=>c.from===deckProfile&&c.type===action.type&&c.page===action.page);connectionPlan.append(option);}connectionPlan.dataset.signature=planSignature;}
  saveCandidate.hidden=!deckLocal||!deckCandidate;saveCandidate.disabled=layoutSaving;
- graphStatus.hidden=!deckLocal;graphStatus.textContent=diagnostics.ready?'탐색 준비 완료':('탐색 준비 필요 · 진입 불가: '+(diagnostics.unreachable.join(', ')||'없음')+' · 복귀 불가: '+(diagnostics.noReturn.join(', ')||'없음')+' · 전체 세션 진입 '+(diagnostics.missingSessions?'없음':'있음')+' · 자동 재배치하지 않습니다.');
+ reloadLayout.textContent=deckCandidate?'초안 버리고 다시 읽기':'서버 다시 읽기';
+ graphStatus.hidden=!deckLocal;graphStatus.dataset.ready=String(diagnostics.ready);
+ graphStatus.textContent=diagnostics.ready?'탐색 준비 완료':('탐색 준비 필요 · 진입 불가: '+(diagnostics.unreachable.join(', ')||'없음')+' · 복귀 불가: '+(diagnostics.noReturn.join(', ')||'없음')+' · 전체 세션 진입 '+(diagnostics.missingSessions?'없음':'있음')+' · 자동 재배치하지 않습니다.');
  for(const deficit of diagnostics.deficits.filter(p=>p.missing)){graphStatus.textContent+=' / '+layouts.find(p=>p.id===deficit.pageId).name+': '+deficit.connections.map(c=>c.page||'전체 세션').join(', ')+' 연결 '+deficit.missing+'개 · 빈 키 '+deficit.empty+'개 · 추가 빈 키 '+deficit.additionalEmpty+'개';}
  if(deckCandidate?.error)layoutMessage(deckCandidate.error);
  const select=$('deckProfile');const signature=JSON.stringify(layouts.map(x=>[x.id,x.name]));
  if(select.dataset.signature!==signature){select.replaceChildren();for(const p of layouts){const option=el('option',p.name);option.value=p.id;select.append(option);}select.dataset.signature=signature;}
- select.value=deckProfile;$('editDeck').setAttribute('aria-pressed',String(deckEditing));$('editDeck').textContent=deckEditing?'편집 완료':'키 편집';$('resetDeck').textContent=defaultDeckLayouts().some(p=>p.id===deckProfile)?'기본 배치':'페이지 삭제';
+ const isDefaultPage=defaultDeckLayouts().some(p=>p.id===deckProfile);
+ select.value=deckProfile;$('editDeck').setAttribute('aria-pressed',String(deckEditing));$('editDeck').textContent=deckEditing?'편집 완료':'키 편집';$('resetDeck').textContent=isDefaultPage?'기본 배치':'페이지 삭제';$('resetDeck').classList.toggle('is-destructive',!isDefaultPage);
+ if($('editorModeBadge')){$('editorModeBadge').textContent=deckEditing?'편집 중':'미리보기';$('editorModeBadge').dataset.editing=String(deckEditing);}
  if(deckLocal&&$('editorPages')){
   const pages=$('editorPages');
   if(pages.dataset.signature!==signature){pages.replaceChildren();for(const p of layouts){const button=el('button',p.name,'editor-page');button.type='button';button.dataset.page=p.id;button.onclick=()=>setDeckProfile(p.id);pages.append(button);}pages.dataset.signature=signature;}
   for(const button of pages.children){if(button.dataset.page===deckProfile)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');}
   $('editorEmpty').hidden=editingSlot!==null;
+  syncEditorEmpty();
  }
 }
 const MAC_SYSTEM_ITEMS=[
@@ -161,11 +207,64 @@ const MAC_APP_URL_PRESET_ITEMS=[
  {url:'x-apple.systempreferences:',label:'시스템 설정 열기'}
 ];
 const MAC_HOTKEY_KEY_ITEMS=[...'abcdefghijklmnopqrstuvwxyz'.split(''),...'0123456789'.split(''),'space','tab','enter','esc','delete','up','down','left','right','f1','f2','f3','f4','f5','f6','f7','f8','f9','f10','f11','f12'];
+const DECK_SYMBOL_LABELS={terminal:'터미널',network:'네트워크 · 세션',enter:'Enter',up:'위 방향키',down:'아래 방향키',left:'왼쪽 방향키',right:'오른쪽 방향키',tab:'Tab',esc:'Esc',refresh:'새로고침',context:'요청 원문',app:'앱 격자',shortcut:'단축어',link:'링크 · URL',keyboard:'키보드 · 단축키','volume-up':'볼륨 올리기','volume-down':'볼륨 내리기','volume-mute':'음소거','media-play':'재생 · 일시정지','media-next':'다음 트랙','media-prev':'이전 트랙','dark-mode':'다크 모드',screenshot:'스크린샷',lock:'화면 잠금',folder:'폴더'};
+const CUSTOM_KIND_GROUPS=[
+ ['macOS 제어',[['macApp','macOS 앱 실행'],['macShortcut','macOS 단축어 실행'],['macSystem','macOS 시스템·미디어 제어'],['macHotkey','macOS 전역 단축키 (활성 창)'],['appUrl','앱 URL 열기 (raycast:// 등)']]],
+ ['웹 · 고급 자동화',[['hostUrl','웹 주소 열기 (http/https)'],['hostProcess','셸 스크립트 실행'],['sessionText','유휴 세션에 텍스트 전송'],['keyCombo','검증된 수신기에 단축키']]]
+];
 let macCatalogState=null,macCatalogLoading=false,macIconGeneration=0,macAutoLabel='',macAutoSymbol='';
 function applyAutoPresentation(labelText,symbolName){
  if(!$('customLabel')||!$('customSymbol'))return;
  if(labelText&&(!$('customLabel').value||$('customLabel').value===macAutoLabel)){$('customLabel').value=labelText;macAutoLabel=labelText;}
  if(symbolName!==undefined&&(!$('customSymbol').value||$('customSymbol').value===macAutoSymbol)){$('customSymbol').value=symbolName;macAutoSymbol=symbolName;}
+}
+function formatMacHotkeyChord(){
+ const modMap=[['customModCmd','⌘'],['customModShift','⇧'],['customModAlt','⌥'],['customModCtrl','⌃']];
+ const prefix=modMap.filter(([id])=>$('customModCmd')&&$(id)?.checked).map(([,glyph])=>glyph).join('');
+ const key=($('customMacHotkeyKey')?.value||'c');
+ const keyText=key.length===1?key.toUpperCase():key.charAt(0).toUpperCase()+key.slice(1);
+ return prefix+keyText;
+}
+function updateKeyPreview(){
+ const section=$('customInspector');
+ if(!section||!$('keyPreviewCard'))return;
+ const kind=$('customKind').value,customActive=kind!=='builtin';
+ const asset=section.dataset.asset||'';
+ const assetCommitted=!!asset&&deckAssets.includes(asset);
+ const colorValue=($('customColor').value||'').trim();
+ const validColor=/^#[a-fA-F0-9]{6}$/.test(colorValue);
+ const swatch=$('customColorSwatch');
+ if(swatch){swatch.style.backgroundColor=validColor?colorValue:'transparent';swatch.classList.toggle('is-set',validColor);}
+ const assignEl=$('keyAssignment'),assignLabel=document.querySelector('label[for="keyAssignment"]');
+ assignEl.classList.toggle('is-overridden',customActive);
+ if(assignLabel)assignLabel.classList.toggle('is-overridden',customActive);
+ if($('keyAssignmentOverrideHint'))$('keyAssignmentOverrideHint').hidden=!customActive;
+ if($('customImageStatus'))$('customImageStatus').textContent=asset?(assetCommitted?'적용된 이미지 있음':'새 이미지 준비됨 (저장 시 반영)'):'선택된 이미지 없음';
+ $('removeCustomImage').classList.toggle('is-empty',!asset);
+ const kindLabel=$('customKind').selectedOptions[0]?.textContent||'사용자 동작';
+ const assignText=assignEl.selectedOptions[0]?.textContent||'빈 키';
+ let actionName=assignText;
+ if(kind==='macApp')actionName=$('customMacApp').selectedOptions[0]?.dataset?.name||'macOS 앱 선택';
+ else if(kind==='macShortcut')actionName=$('customMacShortcut').value.trim()||'macOS 단축어';
+ else if(kind==='macSystem')actionName=$('customMacSystem').selectedOptions[0]?.dataset?.name||'시스템 제어';
+ else if(kind==='macHotkey')actionName=formatMacHotkeyChord();
+ else if(kind==='appUrl')actionName=$('customAppUrl').value.trim()||'앱 URL';
+ else if(kind==='hostUrl')actionName=$('customUrl').value.trim()||'웹 URL';
+ else if(customActive)actionName=kindLabel;
+ $('keyPreviewName').textContent=$('customLabel').value.trim()||actionName;
+ const subParts=[customActive?kindLabel:('기본 기능 · '+assignText)];
+ if(asset&&!assetCommitted)subParts.push('이미지 저장 대기');
+ $('keyPreviewSub').textContent=subParts.join(' · ');
+ const tile=$('keyPreviewTile');
+ tile.style.setProperty('--preview-key-color',validColor?colorValue:'');
+ tile.classList.toggle('has-color',validColor);
+ tile.replaceChildren();
+ if(assetCommitted){
+  const img=el('img');img.src='/api/assets/'+asset;img.width=36;img.height=36;img.alt='';tile.append(img);
+ }else{
+  const sym=$('customSymbol').value||customActionDefaultSymbol({kind,action:$('customMacSystem')?.value});
+  tile.append(icon(sym,'preview-symbol'));
+ }
 }
 function renderMacCatalogOptions(){
  if(!$('customMacApp'))return;
@@ -174,16 +273,17 @@ function renderMacCatalogOptions(){
  const appSelect=$('customMacApp'),currentApp=appSelect.dataset.pending??appSelect.value??'';
  const filtered=query?apps.filter(item=>item.name.toLowerCase().includes(query)||item.app.toLowerCase().includes(query)):apps;
  appSelect.replaceChildren();
- appSelect.append(Object.assign(el('option',apps.length?'-- macOS 앱 선택 --':(macCatalogLoading?'앱 목록 불러오는 중…':'앱 목록 없음 (새로고침)')),{value:''}));
+ appSelect.append(Object.assign(el('option',apps.length?'macOS 앱을 선택하세요':(macCatalogLoading?'앱 목록 불러오는 중…':'앱 목록 없음 (새로고침)')),{value:''}));
  for(const item of filtered){const option=el('option',item.name+' ('+item.app+')');option.value=item.app;option.dataset.name=item.name;appSelect.append(option);}
  if(currentApp&&!filtered.some(item=>item.app===currentApp)){const preserved=apps.find(item=>item.app===currentApp);const option=el('option',(preserved?preserved.name+' · ':'저장된 앱: ')+currentApp);option.value=currentApp;option.dataset.name=preserved?.name||'';appSelect.append(option);}
  appSelect.value=currentApp;
  delete appSelect.dataset.pending;
  const shortcutSelect=$('customMacShortcutSelect'),currentShortcut=$('customMacShortcut')?.value||'';
  shortcutSelect.replaceChildren();
- shortcutSelect.append(Object.assign(el('option',shortcuts.length?'-- 단축어 목록에서 선택 --':(macCatalogLoading?'단축어 불러오는 중…':'단축어 목록 없음 (직접 입력 가능)')),{value:''}));
+ shortcutSelect.append(Object.assign(el('option',shortcuts.length?'단축어 목록에서 선택':(macCatalogLoading?'단축어 불러오는 중…':'단축어 목록 없음 (직접 입력 가능)')),{value:''}));
  for(const name of shortcuts){const option=el('option',name);option.value=name;shortcutSelect.append(option);}
  if(currentShortcut&&shortcuts.includes(currentShortcut))shortcutSelect.value=currentShortcut;
+ updateKeyPreview();
 }
 async function ensureMacCatalog(force=false){
  if(!deckLocal)return;
@@ -230,56 +330,81 @@ async function importMacAppIcon(appPath,{manual=false}={}){
   }
  }finally{
   if($('importMacAppIcon'))$('importMacAppIcon').disabled=false;
+  updateKeyPreview();
  }
 }
 function syncCustomInspectorFields(){
  const value=$('customKind').value,section=$('customInspector');
  if(!section)return;
  for(const [id,show]of [['customMacAppSearch',value==='macApp'],['customMacApp',value==='macApp'],['customMacShortcutSelect',value==='macShortcut'],['customMacShortcut',value==='macShortcut'],['customMacSystem',value==='macSystem'],['customMacHotkeyPreset',value==='macHotkey'],['customMacHotkeyKey',value==='macHotkey'],['customAppUrlPreset',value==='appUrl'],['customAppUrl',value==='appUrl'],['customUrl',value==='hostUrl'],['customShell',value==='hostProcess'],['customScript',value==='hostProcess'],['customCwd',value==='hostProcess'],['customTimeout',value==='hostProcess'],['customMaxOutput',value==='hostProcess'],['customTarget',['sessionText','keyCombo'].includes(value)],['customText',value==='sessionText'],['customSubmit',value==='sessionText'],['customChord',value==='keyCombo'],['customMapping',value==='keyCombo'],['customEnabled',value!=='builtin'],['customTrusted',value!=='builtin']])$(id).parentElement.hidden=!show;
+ $('customMacCatalogActions').hidden=!['macApp','macShortcut'].includes(value);
  $('importMacAppIcon').hidden=value!=='macApp';
  $('refreshMacCatalog').hidden=!['macApp','macShortcut'].includes(value);
  $('customMacHotkeyMods').hidden=value!=='macHotkey';
  $('customMacHotkeyNote').hidden=value!=='macHotkey';
  section.querySelector('.custom-trust-warning').hidden=value==='builtin';
  $('customQualificationNote').hidden=!['sessionText','keyCombo'].includes(value);
+ $('customCapabilities').hidden=value==='builtin';
  if(['macApp','macShortcut'].includes(value))void ensureMacCatalog(false);
+ updateKeyPreview();
 }
 function mountCustomInspector(){
- const section=el('section');section.id='customInspector';section.append(el('h3','키 모양 · 사용자 동작'));
- const field=(id,label,tag='input')=>{const wrapper=el('label',label),control=el(tag);control.id=id;wrapper.append(control);section.append(wrapper);return control;};
- field('customLabel','사용자 이름 (최대 48자)').maxLength=48;
- const symbols=field('customSymbol','내장 기호','select');for(const symbol of ['',...DECK_SYMBOLS]){const option=el('option',symbol||'기본 기호');option.value=symbol;symbols.append(option);}
- field('customColor','색상 (#RRGGBB, 비우면 기본)').placeholder='#315a82';
- const upload=field('customImage','정적 이미지 (PNG/JPEG/WebP · 최대 1MiB)');upload.type='file';upload.accept='image/png,image/jpeg,image/webp';
- const removeImage=el('button','이미지 제거');removeImage.id='removeCustomImage';removeImage.type='button';removeImage.onclick=()=>{customEditorGeneration++;macIconGeneration++;section.dataset.asset='';upload.value='';};section.append(removeImage);
- upload.onchange=async()=>{const file=upload.files[0];if(!file||!deckCandidate||editingSlot===null)return;if(file.size>1048576){layoutMessage('업로드 실패: 최대 1MiB입니다.');return;}const candidate=deckCandidate,slot=editingSlot,page=deckProfile,generation=deckGeneration,editor=customEditorGeneration;const current=()=>deckCandidate===candidate&&editingSlot===slot&&deckProfile===page&&deckGeneration===generation&&customEditorGeneration===editor;upload.disabled=true;try{const response=await fetch('/api/assets/upload',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file}),data=await response.json();if(!current())return;if(!response.ok)throw Error(data.error);if(!candidate.assets.includes(data.id))candidate.assets.push(data.id);section.dataset.asset=data.id;layoutMessage('이미지 준비 완료 · 키 저장 전에는 게시되지 않습니다.');}catch(error){if(current())layoutMessage('업로드 실패: '+error.message);}finally{upload.disabled=false;}};
- const kind=field('customKind','실행 종류','select');for(const [value,label]of [['builtin','기존 기능'],['macApp','macOS 앱 실행'],['macShortcut','macOS 단축어 실행'],['macSystem','macOS 시스템·미디어 제어'],['macHotkey','macOS 전역 단축키 (활성 창)'],['appUrl','앱 URL 스킴 열기 (raycast:// 등)'],['hostUrl','호스트에서 URL 열기'],['hostProcess','별도 호스트 프로세스'],['sessionText','정확한 유휴 세션에 텍스트'],['keyCombo','검증된 특정 수신기에 단축키']]){const option=el('option',label);option.value=value;kind.append(option);}
- const warning=el('p','신뢰한 코드만 등록하세요. 명령은 샌드박스 없이 PC 사용자 권한으로 파일·자격 증명·앱에 접근하며 되돌릴 수 없는 효과를 낼 수 있습니다. 연결한 기기도 이 권한을 실행할 수 있습니다.','custom-trust-warning');section.append(warning);
+ const section=el('section');section.id='customInspector';
+ section.append(el('h3','키 표시','custom-section-heading'));
+ const field=(id,label,tag='input',parent=section)=>{const wrapper=el('label',label),control=el(tag);control.id=id;wrapper.append(control);parent.append(wrapper);return control;};
+ const checkField=(id,label,checked=false)=>{const wrapper=el('label',undefined,'custom-check'),box=el('input');box.type='checkbox';box.id=id;box.checked=checked;wrapper.append(box,el('span',label));section.append(wrapper);return box;};
+ const labelInput=field('customLabel','표시 이름 (최대 48자)');labelInput.maxLength=48;labelInput.placeholder='비우면 기본 이름 사용';labelInput.oninput=updateKeyPreview;
+ const pairRow=el('div',undefined,'custom-pair-row');section.append(pairRow);
+ const symbols=field('customSymbol','기호','select',pairRow);
+ for(const symbol of ['',...DECK_SYMBOLS]){const option=el('option',symbol?(DECK_SYMBOL_LABELS[symbol]||symbol):'기본 기호');option.value=symbol;symbols.append(option);}
+ symbols.onchange=updateKeyPreview;
+ const colorLabel=el('label','배경색 (#RRGGBB)');
+ const colorWrap=el('span',undefined,'color-input-wrap');
+ const colorSwatch=el('span',undefined,'color-swatch');colorSwatch.id='customColorSwatch';colorSwatch.setAttribute('aria-hidden','true');
+ const colorInput=el('input');colorInput.id='customColor';colorInput.placeholder='#315a82';colorInput.oninput=updateKeyPreview;
+ colorWrap.append(colorSwatch,colorInput);colorLabel.append(colorWrap);pairRow.append(colorLabel);
+ const imageBlock=el('div',undefined,'custom-image-block');section.append(imageBlock);
+ const upload=field('customImage','이미지 (PNG/JPEG/WebP, 1MiB 이하)','input',imageBlock);upload.type='file';upload.accept='image/png,image/jpeg,image/webp';
+ const imageBar=el('div',undefined,'custom-image-bar');
+ const removeImage=el('button','이미지 제거','custom-ghost-btn');removeImage.id='removeCustomImage';removeImage.type='button';
+ const imageStatus=el('span','선택된 이미지 없음','custom-image-status');imageStatus.id='customImageStatus';
+ removeImage.onclick=()=>{customEditorGeneration++;macIconGeneration++;const hadAsset=Boolean(section.dataset.asset||upload.value);section.dataset.asset='';upload.value='';updateKeyPreview();if(!hadAsset&&$('customImageStatus'))$('customImageStatus').textContent='제거할 이미지가 없습니다';};
+ imageBar.append(removeImage,imageStatus);imageBlock.append(imageBar);
+ upload.onchange=async()=>{const file=upload.files[0];if(!file||!deckCandidate||editingSlot===null)return;if(file.size>1048576){layoutMessage('업로드 실패: 최대 1MiB입니다.');return;}const candidate=deckCandidate,slot=editingSlot,page=deckProfile,generation=deckGeneration,editor=customEditorGeneration;const current=()=>deckCandidate===candidate&&editingSlot===slot&&deckProfile===page&&deckGeneration===generation&&customEditorGeneration===editor;upload.disabled=true;try{const response=await fetch('/api/assets/upload',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file}),data=await response.json();if(!current())return;if(!response.ok)throw Error(data.error);if(!candidate.assets.includes(data.id))candidate.assets.push(data.id);section.dataset.asset=data.id;layoutMessage('이미지 준비 완료 · 키 저장 전에는 게시되지 않습니다.');}catch(error){if(current())layoutMessage('업로드 실패: '+error.message);}finally{upload.disabled=false;updateKeyPreview();}};
+ section.append(el('h3','사용자 동작','custom-section-heading custom-section-action'));
+ const kind=field('customKind','실행 종류','select');
+ kind.append(Object.assign(el('option','사용 안 함 (위 기본 기능 사용)'),{value:'builtin'}));
+ for(const [groupLabel,items]of CUSTOM_KIND_GROUPS){const grp=el('optgroup');grp.label=groupLabel;for(const [value,label]of items){const option=el('option',label);option.value=value;grp.append(option);}kind.append(grp);}
+ const warning=el('p','신뢰할 수 있는 동작만 등록하세요. 연결된 기기에서 이 키를 누르면 이 맥의 사용자 권한으로 실행됩니다.','custom-trust-warning');section.append(warning);
  const appSearch=field('customMacAppSearch','앱 검색');appSearch.type='search';appSearch.placeholder='예: Safari, Obsidian, Slack';appSearch.oninput=renderMacCatalogOptions;
  const appSelect=field('customMacApp','설치된 macOS 앱','select');
  appSelect.onchange=()=>{
   const opt=appSelect.selectedOptions[0];
-  if(!appSelect.value)return;
+  if(!appSelect.value){updateKeyPreview();return;}
   applyAutoPresentation(opt?.dataset?.name||'');
   void importMacAppIcon(appSelect.value);
  };
- const importIconBtn=el('button','선택 앱 아이콘 다시 가져오기','custom-inline-btn');importIconBtn.id='importMacAppIcon';importIconBtn.type='button';importIconBtn.onclick=()=>importMacAppIcon($('customMacApp').value,{manual:true});section.append(importIconBtn);
- const refreshCatalogBtn=el('button','앱·단축어 목록 새로고침','custom-inline-btn');refreshCatalogBtn.id='refreshMacCatalog';refreshCatalogBtn.type='button';refreshCatalogBtn.onclick=()=>ensureMacCatalog(true);section.append(refreshCatalogBtn);
+ const catalogActions=el('div',undefined,'custom-inline-row');catalogActions.id='customMacCatalogActions';
+ const importIconBtn=el('button','아이콘 다시 가져오기','custom-inline-btn');importIconBtn.id='importMacAppIcon';importIconBtn.type='button';importIconBtn.onclick=()=>importMacAppIcon($('customMacApp').value,{manual:true});
+ const refreshCatalogBtn=el('button','목록 새로고침','custom-inline-btn');refreshCatalogBtn.id='refreshMacCatalog';refreshCatalogBtn.type='button';refreshCatalogBtn.onclick=()=>ensureMacCatalog(true);
+ catalogActions.append(importIconBtn,refreshCatalogBtn);section.append(catalogActions);
  const shortcutSelect=field('customMacShortcutSelect','설치된 macOS 단축어','select');
  shortcutSelect.onchange=()=>{
   if(!shortcutSelect.value)return;
   $('customMacShortcut').value=shortcutSelect.value;
   applyAutoPresentation(shortcutSelect.value,'shortcut');
+  updateKeyPreview();
  };
- field('customMacShortcut','단축어 이름 (직접 입력 가능)').placeholder='예: 작업 환경 열기';
+ const shortcutInput=field('customMacShortcut','단축어 이름 (직접 입력 가능)');shortcutInput.placeholder='예: 작업 환경 열기';shortcutInput.oninput=updateKeyPreview;
  const systemSelect=field('customMacSystem','시스템·미디어 동작','select');
  for(const item of MAC_SYSTEM_ITEMS){const option=el('option',item.name+' · '+item.detail);option.value=item.action;option.dataset.name=item.name;option.dataset.symbol=item.symbol;systemSelect.append(option);}
  systemSelect.onchange=()=>{
   const opt=systemSelect.selectedOptions[0];
   if(opt)applyAutoPresentation(opt.dataset.name,opt.dataset.symbol||'app');
+  updateKeyPreview();
  };
- const hotkeyPreset=field('customMacHotkeyPreset','단축키 프리셋 (선택사항)','select');
- hotkeyPreset.append(Object.assign(el('option','-- 단축키 프리셋 선택 --'),{value:''}));
+ const hotkeyPreset=field('customMacHotkeyPreset','단축키 프리셋 (선택)','select');
+ hotkeyPreset.append(Object.assign(el('option','자주 쓰는 단축키 선택'),{value:''}));
  for(const preset of MAC_HOTKEY_PRESET_ITEMS){const option=el('option',preset.label);option.value=JSON.stringify(preset);hotkeyPreset.append(option);}
  hotkeyPreset.onchange=()=>{
   if(!hotkeyPreset.value)return;
@@ -287,48 +412,55 @@ function mountCustomInspector(){
   $('customMacHotkeyKey').value=preset.key;
   for(const mod of ['cmd','shift','alt','ctrl'])$('customMod'+mod[0].toUpperCase()+mod.slice(1)).checked=preset.modifiers.includes(mod);
   applyAutoPresentation(preset.label,'keyboard');
+  updateKeyPreview();
  };
  const hotkeyKey=field('customMacHotkeyKey','전송할 키','select');
  for(const k of MAC_HOTKEY_KEY_ITEMS){const option=el('option',k.length===1?k.toUpperCase():k);option.value=k;hotkeyKey.append(option);}
+ hotkeyKey.onchange=updateKeyPreview;
  const modFieldset=el('fieldset');modFieldset.id='customMacHotkeyMods';modFieldset.append(el('legend','보조 키'));
  const modGrid=el('div',undefined,'custom-mod-grid');
  for(const [mod,label]of [['cmd','⌘ Command'],['shift','⇧ Shift'],['alt','⌥ Option'],['ctrl','⌃ Control']]){
-  const wrap=el('label'),box=el('input');box.type='checkbox';box.id='customMod'+mod[0].toUpperCase()+mod.slice(1);
+  const wrap=el('label'),box=el('input');box.type='checkbox';box.id='customMod'+mod[0].toUpperCase()+mod.slice(1);box.onchange=updateKeyPreview;
   wrap.append(box,document.createTextNode(label));modGrid.append(wrap);
  }
  modFieldset.append(modGrid);section.append(modFieldset);
- const hotkeyNote=el('p','macOS 손쉬운 사용(Accessibility) 및 자동화(System Events) 권한이 필요하며, 실행 시점에 현재 활성 창에 키 입력을 전송합니다. 특정 터미널 수신기 검증은 수행하지 않습니다.','custom-permission-note');hotkeyNote.id='customMacHotkeyNote';section.append(hotkeyNote);
- const appUrlPreset=field('customAppUrlPreset','앱 URL 프리셋 (선택사항)','select');
- appUrlPreset.append(Object.assign(el('option','-- 앱 URL 프리셋 선택 --'),{value:''}));
+ const hotkeyNote=el('p','macOS 손쉬운 사용(Accessibility) 및 자동화(System Events) 권한이 필요하며, 실행 시 현재 활성 창에 키 입력을 전송합니다.','custom-permission-note');hotkeyNote.id='customMacHotkeyNote';section.append(hotkeyNote);
+ const appUrlPreset=field('customAppUrlPreset','앱 URL 프리셋 (선택)','select');
+ appUrlPreset.append(Object.assign(el('option','자주 쓰는 앱 URL 선택'),{value:''}));
  for(const preset of MAC_APP_URL_PRESET_ITEMS){const option=el('option',preset.label+' ('+preset.url+')');option.value=JSON.stringify(preset);appUrlPreset.append(option);}
  appUrlPreset.onchange=()=>{
   if(!appUrlPreset.value)return;
   const preset=JSON.parse(appUrlPreset.value);
   $('customAppUrl').value=preset.url;
   applyAutoPresentation(preset.label,'link');
+  updateKeyPreview();
  };
- const appUrlInput=field('customAppUrl','앱 URL 스킴 (http/https 외)');appUrlInput.type='text';appUrlInput.placeholder='raycast:// 또는 obsidian://open';appUrlInput.autocomplete='off';
- field('customUrl','HTTP/HTTPS URL').type='url';
+ const appUrlInput=field('customAppUrl','앱 URL 스킴 (http/https 외)');appUrlInput.type='text';appUrlInput.placeholder='raycast:// 또는 obsidian://open';appUrlInput.autocomplete='off';appUrlInput.oninput=updateKeyPreview;
+ const hostUrlInput=field('customUrl','HTTP/HTTPS URL');hostUrlInput.type='url';hostUrlInput.placeholder='https://example.com';hostUrlInput.oninput=updateKeyPreview;
  const shell=field('customShell','명시적 인터프리터','select');for(const value of ['bash','zsh','powershell','cmd']){const option=el('option',value);option.value=value;shell.append(option);}
  field('customScript','신뢰한 스크립트','textarea');field('customCwd','기존 절대 작업 폴더');
  const timeout=field('customTimeout','최대 실행 시간 (밀리초)');timeout.type='number';timeout.value='30000';
  const outputLimit=field('customMaxOutput','최대 출력 크기 (바이트)');outputLimit.type='number';outputLimit.value='65536';
- const target=field('customTarget','정확한 수신기 ID (창 제목/현재 포커스 불가)');field('customText','리터럴 텍스트','textarea');
- const submit=field('customSubmit','텍스트 뒤 Enter 제출');submit.type='checkbox';
+ const target=field('customTarget','정확한 수신기 ID (창 제목·현재 포커스 불가)');field('customText','리터럴 텍스트','textarea');
+ const submit=checkField('customSubmit','텍스트 뒤 Enter 제출',false);
  field('customChord','단축키');field('customMapping','검증된 수신기 매핑 ID');
- const enabled=field('customEnabled','등록 동작 활성화');enabled.type='checkbox';enabled.checked=true;
- const trusted=field('customTrusted','위 사용자 권한 실행 위험을 이해하고 신뢰한 동작을 등록합니다');trusted.type='checkbox';
- const qualification=el('p','sessionText/단축키는 정확한 ID·epoch·유휴 상태를 확인하는 검증된 수신기가 없으면 차단됩니다. 전역 키 입력으로 우회하지 않습니다.');qualification.id='customQualificationNote';section.append(qualification);
- const capability=el('p','호스트 실행 기능 확인 중…');capability.id='customCapabilities';capability.setAttribute('role','status');section.append(capability);
+ const enabled=checkField('customEnabled','키 활성화 (해제하면 실행 차단)',true);
+ const trusted=checkField('customTrusted','이 맥의 사용자 권한으로 실행됨을 확인하고 등록합니다',false);
+ const qualification=el('p','sessionText/단축키는 정확한 ID·epoch·유휴 상태를 확인하는 검증된 수신기가 없으면 차단됩니다. 전역 키 입력으로 우회하지 않습니다.','custom-permission-note');qualification.id='customQualificationNote';section.append(qualification);
+ const capability=el('p','호스트 실행 기능 확인 중…','custom-capabilities');capability.id='customCapabilities';capability.setAttribute('role','status');section.append(capability);
  const targets=el('datalist');targets.id='customReceiverIds';section.append(targets);target.setAttribute('list',targets.id);
  api('/api/actions/capabilities').then(caps=>{
   if(!deckLocal)return;
   const available=Array.isArray(caps.shellKinds)?caps.shellKinds:[],receivers=Array.isArray(caps.receivers)?caps.receivers:[];
-  capability.textContent='macOS 제어: '+(caps.macControl?'사용 가능':'사용 불가 (macOS 전용)')+' · 사용 가능한 셸: '+(available.join(', ')||'없음')+' · URL/앱 스킴: '+((caps.hostUrl||caps.appUrl)?'사용 가능':'사용 불가')+' · 등록 수신기: '+(receivers.join(', ')||'없음')+' · 등록은 현재 유휴/권한 확인이나 Windows 실기 검증을 뜻하지 않습니다.';
+  const parts=['macOS 제어: '+(caps.macControl?'가능':'불가')];
+  if(available.length)parts.push('셸: '+available.join(', '));
+  parts.push('URL: '+((caps.hostUrl||caps.appUrl)?'가능':'불가'));
+  if(receivers.length)parts.push('수신기: '+receivers.join(', '));
+  capability.textContent=parts.join(' · ');
   for(const option of shell.options){option.disabled=!available.includes(option.value);option.title=option.disabled?'이 호스트에서 사용할 수 없는 인터프리터':'';}
   for(const option of kind.options){if(['macApp','macShortcut','macSystem','macHotkey'].includes(option.value)){option.disabled=caps.macControl===false;option.title=option.disabled?'macOS 호스트에서만 사용할 수 있습니다':'';}}
   for(const id of receivers){const option=el('option');option.value=id;targets.append(option);}
- }).catch(()=>{capability.textContent='호스트 실행 기능을 확인하지 못했습니다. 사용할 수 있다고 추정하지 않습니다.';});
+ }).catch(()=>{capability.textContent='호스트 실행 기능을 확인하지 못했습니다.';});
  kind.onchange=()=>{
   syncCustomInspectorFields();
   const value=kind.value;
@@ -336,10 +468,11 @@ function mountCustomInspector(){
   else if(value==='macHotkey'){if(!$('customMacHotkeyKey').value)$('customMacHotkeyKey').value='c';if(!['cmd','shift','alt','ctrl'].some(m=>$('customMod'+m[0].toUpperCase()+m.slice(1)).checked))$('customModCmd').checked=true;applyAutoPresentation('','keyboard');}
   else if(value==='appUrl'||value==='hostUrl')applyAutoPresentation('','link');
   else if(value==='macShortcut')applyAutoPresentation('','shortcut');
+  updateKeyPreview();
  };
- const remove=el('button','선택 키의 동작 등록 삭제');remove.type='button';remove.id='removeCustomAction';remove.onclick=()=>{const candidate=beginDeckCandidate(),slot=currentDeckLayout().slots[editingSlot];if(slot.type!=='custom')return;if(candidate.layouts.some(page=>page.slots.some((other,i)=>other.type==='custom'&&other.actionId===slot.actionId&&(page.id!==deckProfile||i!==editingSlot)))){layoutMessage('삭제 차단: 다른 키에서 이 동작을 참조합니다. 먼저 해당 키를 직접 변경하세요.');return;}candidate.actions=candidate.actions.filter(action=>action.id!==slot.actionId);kind.value='builtin';syncCustomInspectorFields();$('keyAssignment').value=JSON.stringify({type:'empty'});layoutMessage('동작 삭제 초안 · 키 저장으로 게시합니다.');};section.append(remove);
+ const remove=el('button','등록된 동작 삭제','custom-danger-btn');remove.type='button';remove.id='removeCustomAction';remove.onclick=()=>{const candidate=beginDeckCandidate(),slot=currentDeckLayout().slots[editingSlot];if(slot.type!=='custom')return;if(candidate.layouts.some(page=>page.slots.some((other,i)=>other.type==='custom'&&other.actionId===slot.actionId&&(page.id!==deckProfile||i!==editingSlot)))){layoutMessage('삭제 차단: 다른 키에서 이 동작을 참조합니다. 먼저 해당 키를 직접 변경하세요.');return;}candidate.actions=candidate.actions.filter(action=>action.id!==slot.actionId);kind.value='builtin';syncCustomInspectorFields();$('keyAssignment').value=JSON.stringify({type:'empty'});updateKeyPreview();layoutMessage('동작 삭제 초안 · 저장을 누르면 반영됩니다.');};section.append(remove);
  const output=el('pre');output.id='customOutput';output.setAttribute('aria-live','polite');section.append(output);
- const cancelRun=el('button','실행 취소 (되돌리기 아님)');cancelRun.id='cancelCustomRun';cancelRun.type='button';cancelRun.hidden=true;cancelRun.onclick=async()=>{const id=currentDeckLayout().slots[editingSlot]?.actionId,run=customRunStates.get(id);if(run)try{await api('/api/actions/cancel/'+run.runId,{});await pollCustomRuns();}catch(error){layoutMessage('취소 실패: '+error.message);}};section.append(cancelRun);
+ const cancelRun=el('button','실행 중지 (되돌리기 아님)','custom-danger-btn');cancelRun.id='cancelCustomRun';cancelRun.type='button';cancelRun.hidden=true;cancelRun.onclick=async()=>{const id=currentDeckLayout().slots[editingSlot]?.actionId,run=customRunStates.get(id);if(run)try{await api('/api/actions/cancel/'+run.runId,{});await pollCustomRuns();}catch(error){layoutMessage('취소 실패: '+error.message);}};section.append(cancelRun);
  $('keyEditor').insertBefore(section,$('saveAssignment').parentElement);
  syncCustomInspectorFields();
 }
@@ -460,17 +593,18 @@ function openKeyEditor(index){
  for(const [label,items] of groups){const group=el('optgroup');group.label=label;for(const [name,value] of items){const option=el('option',name);option.value=JSON.stringify(value);group.append(option);}select.append(group);}
  for(const [name,value] of [['Codex 쿼터',{type:'quota',provider:'codex'}],['Antigravity 쿼터',{type:'quota',provider:'agy'}],['쿼터 페이지',{type:'page',page:'quota'}]]){const option=el('option',name);option.value=JSON.stringify(value);select.append(option);}
  const {presentation,...baseSlot}=layout.slots[index];const value=JSON.stringify(baseSlot);
- if(![...select.options].some(o=>o.value===value)){const missing=el('option','연결되지 않은 에이전트');missing.value=value;select.append(missing);}
+ if(![...select.options].some(o=>o.value===value)){const missing=el('option',baseSlot.type==='custom'?'사용자 동작 (아래 설정 사용)':'연결되지 않은 에이전트');missing.value=value;select.append(missing);}
  select.value=value;
  loadCustomInspector(layout.slots[index]);
- select.onchange=()=>{const action=JSON.parse(select.value);if(!['sessions','page'].includes(action.type))return;const report=deckGraphDiagnostics(editorLayouts(),[{from:layout.id,...action}]).deficits.find(p=>p.pageId===layout.id);layoutMessage(layout.name+' · 선택 연결 '+(action.page||'전체 세션')+' · 빈 키 '+report.empty+'개 · 필요한 빈 키 추가 '+report.additionalEmpty+'개'+(layout.slots[index].type!=='empty'&&JSON.stringify(action)!==value?' · 차단: 이 키를 먼저 직접 비우세요.':''));};
+ select.onchange=()=>{updateKeyPreview();const action=JSON.parse(select.value);if(!['sessions','page'].includes(action.type))return;const report=deckGraphDiagnostics(editorLayouts(),[{from:layout.id,...action}]).deficits.find(p=>p.pageId===layout.id);layoutMessage(layout.name+' · 선택 연결 '+(action.page||'전체 세션')+' · 빈 키 '+report.empty+'개 · 필요한 빈 키 추가 '+report.additionalEmpty+'개'+(layout.slots[index].type!=='empty'&&JSON.stringify(action)!==value?' · 차단: 이 키를 먼저 직접 비우세요.':''));};
  for(const error of $('keyEditor').querySelectorAll('.layout-error'))error.textContent='';
  if(!$('keyEditor').open)$('keyEditor').show();
  $('editorEmpty').hidden=true;
+ if($('editorSettings')&&window.innerWidth<=1200)$('editorSettings').scrollIntoView({block:'nearest',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
  for(const [i,key] of [...$('keys').querySelectorAll('button[data-key-id]')].entries())key.classList.toggle('configuring',i===index);
  select.focus();
 }
-function closeKeyEditor(){customEditorGeneration++;const index=editingSlot;if($('keyEditor').open)$('keyEditor').close();editingSlot=null;modal=false;if($('editorEmpty'))$('editorEmpty').hidden=false;for(const key of $('keys').querySelectorAll('.configuring'))key.classList.remove('configuring');if(index!==null&&deckLocal&&deckEditing)$('keys').querySelectorAll('button[data-key-id]')[index]?.focus();}
+function closeKeyEditor(){customEditorGeneration++;const index=editingSlot;if($('keyEditor').open)$('keyEditor').close();editingSlot=null;modal=false;if($('editorEmpty')){$('editorEmpty').hidden=false;syncEditorEmpty();}for(const key of $('keys').querySelectorAll('.configuring'))key.classList.remove('configuring');if(index!==null&&deckLocal&&deckEditing)$('keys').querySelectorAll('button[data-key-id]')[index]?.focus();}
 function openDeckRequest(){
  const content=$('requestContent');if(!content){toast('표시할 요청이 없습니다.');return;}
  const dialog=$('requestDetail'),copy=content.cloneNode(true);copy.removeAttribute('id');$('requestDetailContent').replaceChildren(copy);
