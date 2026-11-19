@@ -30,22 +30,27 @@ npm start
 
 | 환경 | 현재 상태 |
 | --- | --- |
-| macOS | 실험적. Chromium의 실제 HTTP·페어링·편집 테스트와 격리된 zsh/tmux 수신기 테스트를 실행했습니다. |
+| macOS | 실험적. Chromium의 실제 HTTP·페어링·편집 테스트, macOS 앱 카탈로그/`sips` 아이콘 추출, 격리된 zsh/tmux 수신기 테스트를 실행했습니다. |
 | Windows + WSL | 구현 및 모의 테스트 존재. 실제 Windows GUI·WSL·ACL·로그인 서비스 검증 미완료입니다. |
 | Linux | 일부 실행 경로가 있으나 실제 호스트 검증 미완료입니다. 자동 서비스 설치는 지원하지 않습니다. |
 | iPad Safari / 기타 모바일 브라우저 | Chromium 뷰포트 테스트와 별개로, 실제 기기 검증 미완료입니다. |
 
-범용 전역 단축키, 현재 포커스 창에 입력, 임의 앱의 원격 조작은 지원하지 않습니다. CI 성공은 실제 OS·기기 인증을 뜻하지 않습니다.
+macOS 외 OS(Windows/Linux)에서는 macOS 앱·단축어·시스템 제어 및 전역 단축키(`macHotkey`)를 지원하지 않습니다. 또한 `macHotkey`는 `System Events`를 통해 실행 시점의 현재 활성 창에 키 입력을 전송하며 수신기 신원을 검증하지 않습니다. 검증된 세션 문자 입력(`sessionText`/`keyCombo`)은 여전히 격리된 tmux+zsh 수신기 전용입니다. CI 성공은 실제 OS·기기 인증을 뜻하지 않습니다.
 
 ## 할 수 있는 일
 
 - 키 이름·기호·색상·정적 이미지를 PC에서 편집하고 여러 페이지를 구성합니다.
-- 호스트에서 HTTP/HTTPS URL을 열거나, 명시한 셸과 절대 작업 폴더에서 스크립트를 실행합니다.
-- 검증된 명시적 수신기에 literal text 또는 제한된 키 조합을 보냅니다.
-- 선택적으로 Herdr/Reason 세션과 Codex/Antigravity 활성계정 쿼터를 표시합니다. 일반 호스트 동작에 이 통합들은 필요하지 않습니다.
+- **macOS 앱 실행 및 아이콘 가져오기 (`macApp`)**: `/Applications`, `/System/Applications`, `/System/Applications/Utilities`, `~/Applications`, `Finder.app` 목록을 검색해 키에 연결하고, `.icns` 아이콘을 PNG→WebP(`.deck-assets/`)로 자동 변환해 버튼에 표시합니다.
+- **macOS 단축어 실행 (`macShortcut`)**: `Shortcuts.app`(`shortcuts list`)의 단축어를 선택하거나 이름을 직접 입력해 실행합니다.
+- **macOS 시스템·미디어 제어 12종 (`macSystem`)**: 볼륨 올리기/내리기/음소거, 음악(Music/Spotify) 재생·이전/다음 트랙, 다크 모드 전환, 영역 스크린샷, 화면 잠금, Mission Control, Finder 및 다운로드 폴더 열기.
+- **macOS 전역 단축키 (`macHotkey`)**: 복사·붙여넣기·영역 캡처·Spotlight 등 프리셋 또는 보조키(`⌘`/`⇧`/`⌥`/`⌃`) + 키(`a–z`, `0–9`, 방향키, `F1–F12` 등)를 `System Events`로 전송합니다. **사용하려면 macOS 시스템 설정 → 개인정보 보호 및 보안 → 손쉬운 사용(Accessibility) 및 자동화(System Events) 권한이 필요합니다.**
+- **앱 URL 스킴(`appUrl`) 및 웹 URL(`hostUrl`)**: `raycast://`, `obsidian://`, `slack://`, `vscode://` 같은 앱 URL 스킴이나 `http:`/`https:` 웹 주소를 호스트 OS에 전달합니다.
+- 명시한 셸과 절대 작업 폴더에서 스크립트를 실행합니다 (`hostProcess`).
+- 검증된 명시적 수신기에 literal text 또는 제한된 키 조합을 보냅니다 (`sessionText`/`keyCombo`).
+- 선택적으로 Herdr/Reason 세션과 Codex/Antigravity 활성계정 쿼터를 표시합니다. 일반 맥 제어 및 호스트 동작에 이 통합들은 필요하지 않습니다.
 - 작성한 15개 좌표를 유지합니다. **전체 세션 뱅크** 키는 별도의 12개 세션 + 돌아가기/이전/다음 뱅크를 열며, 사용자 키를 이동하거나 덮어쓰지 않습니다.
 
-PC 미리보기·저장·가져오기는 실행하지 않습니다. 원격 기기는 executable payload를 작성하지 못하며 저장된 ID/revision과 서버 발급 문맥·일회용 nonce로만 실행합니다. 내장 승인 응답은 별도의 최신 ticket·원문 검사를 유지합니다. 오프라인 큐, 자동 재대상 지정, 자동 승인, 불확실한 실행의 자동 재시도는 없습니다.
+PC 미리보기·저장·가져오기는 실행하지 않습니다. 원격 기기는 executable payload를 작성하지 못하며 저장된 ID/revision과 서버 발급 문맥·일회용 nonce로만 실행합니다. 앱/단축어 목록 조회(`/api/actions/mac-catalog`)와 아이콘 추출(`/api/actions/mac-app-icon`)도 PC localhost 전용입니다. 내장 승인 응답은 별도의 최신 ticket·원문 검사를 유지합니다. 오프라인 큐, 자동 재대상 지정, 자동 승인, 불확실한 실행의 자동 재시도는 없습니다.
 
 ## 보안 경계
 
@@ -54,7 +59,7 @@ PC 미리보기·저장·가져오기는 실행하지 않습니다. 원격 기�
 - HTTP는 암호화되지 않습니다. 인터넷 공개, 포트 포워딩, 공용망 운영을 하지 마세요. 신뢰한 사설망에서만 사용하세요.
 - Host/Origin/실제 peer 검사를 적용하지만 같은 사용자 권한의 악성 로컬 프로그램까지 방어하지는 않습니다. 프록시 헤더나 화면 크기는 관리 권한을 부여하지 않습니다.
 - 연결 등록은 재시작 후에도 유지되며 localhost에서 전체 해제할 수 있습니다. 해제 이전에 이미 진입한 효과는 되돌리지 못합니다.
-- URL 전달의 `handoff`는 OS에 넘겼다는 뜻이지 웹 페이지 로드 성공이 아닙니다. 자격 증명 포함 URL과 HTTP/HTTPS 이외 scheme은 거부합니다.
+- URL/앱 URL 전달의 `handoff`는 OS에 넘겼다는 뜻이지 대상 앱이나 웹 페이지의 로드 성공이 아닙니다. 자격 증명 포함 URL과 `file:`, `javascript:`, `data:`, `vbscript:` 같은 위험한 scheme은 거부합니다 (`hostUrl`은 `http:`/`https:` 전용, `appUrl`은 허용된 비웹 앱 scheme 전용).
 - stdout/stderr와 실행 정의는 로컬 관리에만 공개합니다. 스크린샷·버그 보고·백업에 개인정보를 포함하지 마세요.
 
 ## 선택 통합
@@ -145,7 +150,7 @@ node src/host/connections.mjs --migrate
 server.mjs             HTTP 진입점과 실제 런타임 연결
 src/deck/              15-key 모델·편집기·입력·스타일·canonical HTML
 src/actions/           사용자 동작·snapshot·이미지 저장소
-src/host/              권한·설정·프로세스·수신기
+src/host/              권한·설정·프로세스·macOS 제어·수신기
 src/integrations/      선택적 Herdr/Reason/쿼터 어댑터와 규칙
 scripts/build/         유지되는 소스를 HTML에 삽입하는 빌드
 scripts/install-service.mjs  로그인 서비스 설치/준비

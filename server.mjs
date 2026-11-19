@@ -17,6 +17,7 @@ import {createCustomHandler} from './src/actions/custom-actions.mjs';
 import {createHostDispatcher} from './src/host/host-actions.mjs';
 import {discoverHostTools} from './src/host/host-config.mjs';
 import {loadReceivers} from './src/host/receiver-config.mjs';
+import {createMacCatalog} from './src/host/mac-control.mjs';
 const exec=promisify(execFile),port=43187;
 const htmlPath=new URL('./src/deck/index.html',import.meta.url);
 export function local(req,listenPort=port){return localManagement(req,listenPort);}
@@ -24,12 +25,12 @@ export {sameOrigin};
 function deviceToken(req){return (req.headers.cookie||'').match(/(?:^|; )deck=([a-f0-9]+)/)?.[1];}
 function send(res,status,obj){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(obj));}
 async function body(req){let text='';for await(const c of req){text+=c;if(text.length>2048)throw new Error('요청이 너무 큽니다.');}return JSON.parse(text||'{}');}
-export function createRequestHandler({sessions,layouts=createLayoutStore(),assets=createAssetStore(fileURLToPath(new URL('./.deck-assets',import.meta.url))),dispatcher=createHostDispatcher(),bridge,network,nativeHerdr,quotas,pin=String(randomInt(100000,1000000)),listenPort=port,addresses=()=>connectionAddresses(undefined,listenPort)}){
+export function createRequestHandler({sessions,layouts=createLayoutStore(),assets=createAssetStore(fileURLToPath(new URL('./.deck-assets',import.meta.url))),dispatcher=createHostDispatcher(),macCatalog=createMacCatalog(),bridge,network,nativeHerdr,quotas,pin=String(randomInt(100000,1000000)),listenPort=port,addresses=()=>connectionAddresses(undefined,listenPort)}){
 const attempts=new Map();
 const isLocal=req=>local(req,listenPort);
 function auth(req){if(isLocal(req))return true;try{return sessions.has(deviceToken(req));}catch{return false;}}
 const handleLayout=createLayoutHandler({store:layouts,auth,port:listenPort});
-const handleCustom=createCustomHandler({store:layouts,assets,dispatcher,auth,authority:req=>isLocal(req)?'local':deviceToken(req),admitAuthority:(req,enter)=>{
+const handleCustom=createCustomHandler({store:layouts,assets,dispatcher,macCatalog,auth,authority:req=>isLocal(req)?'local':deviceToken(req),admitAuthority:(req,enter)=>{
  if(isLocal(req))return {effect:enter()};
  if(typeof sessions.admit!=='function')throw Error('Paired authority admission is unavailable');
  return sessions.admit(deviceToken(req),enter);
