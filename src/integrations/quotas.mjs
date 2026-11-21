@@ -6,7 +6,7 @@ function stop(child){
  if(child.pid){try{process.kill(-child.pid,'SIGKILL');return;}catch{}}
  child.kill('SIGKILL');
 }
-export const QUOTA_TTL = 60000, QUOTA_STALE = 180000;
+export const QUOTA_TTL = 30000, QUOTA_STALE = 180000;
 function percent(value, scale=1) {
  return typeof value==='number' && Number.isFinite(value) && value>=0 && value<=100/scale ? Math.round(value*scale*10)/10 : null;
 }
@@ -17,6 +17,17 @@ function reset(value) {
 }
 const emptyWindow = () => ({remaining:null,resetsAt:null});
 function base(provider) {return {provider,scope:'active-account',accountLabel:'활성계정 · 전체 계정 아님',plan:null,buckets:[],models:[]};}
+function safeLabel(raw, fallback) {
+ const value=String(raw||'');
+ return /^[\w .()+:/-]{1,80}$/.test(value)&&!/(token|bearer|secret|csrf)/i.test(value)?value:fallback;
+}
+function codexWindowTarget(mins) {
+ if(mins===300)return 'fiveHour';
+ if(mins===1440)return 'daily';
+ if(mins===10080)return 'weekly';
+ if(mins===40320||mins===43200||mins===44640)return 'monthly';
+ return null;
+}
 export function normalizeCodex(result) {
  const out=base('codex');
  const planRaw=result?.rateLimits?.planType||result?.planType||Object.values(result?.rateLimitsByLimitId||{})[0]?.planType;
@@ -31,7 +42,7 @@ export function normalizeCodex(result) {
   const bucket={id:'codex-'+digest(identity),label:'공유 한도 '+(out.buckets.length+1),fiveHour:emptyWindow(),weekly:emptyWindow()};
   for(const w of [value.primary,value.secondary]){
    if(!w)continue;
-   const target=w.windowDurationMins===300?'fiveHour':w.windowDurationMins===10080?'weekly':null;
+   const target=codexWindowTarget(w.windowDurationMins);
    if(!target)continue;
    const used=percent(w.usedPercent);
    bucket[target]={remaining:used===null?null:Math.round((100-used)*10)/10,resetsAt:reset(w.resetsAt)};
@@ -41,21 +52,38 @@ export function normalizeCodex(result) {
  return out;
 }
 export function normalizeAgy(result) {
- const out=base('agy'), seen=new Set();
+ const out=base('agy'), seen=new Set(), seenGroups=new Set(), groupIdMap=new Map();
  const planRaw=result?.planType||result?.userStatus?.planType||result?.plan;
- out.plan=typeof planRaw==='string'&&/^[a-zA-Z0-9_ -]{1,32}$/.test(planRaw)?planRaw:null;
+ out.plan=typeof planRaw==='string'&&/^[a-zA-Z0-9_ -]{1,32}$/.test(planRaw)&&!/(token|bearer|secret|csrf)/i.test(planRaw)?planRaw:null;
+ const normWin=w=>w&&typeof w==='object'?{remaining:percent(w.remainingFraction,100),resetsAt:reset(w.resetTime)}:emptyWindow();
+ for(const g of Array.isArray(result?.usageGroups)?result.usageGroups:[]){
+  if(!g||typeof g!=='object')continue;
+  const rawKey=String(g.id||g.name||'');
+  if(!rawKey||seenGroups.has(rawKey))continue;
+  const fiveHour=normWin(g.fiveHour), weekly=normWin(g.weekly), monthly=g.monthly?normWin(g.monthly):null;
+  if(fiveHour.remaining===null&&weekly.remaining===null&&(!monthly||monthly.remaining===null))continue;
+  seenGroups.add(rawKey);
+  const bucketId='agy-group-'+digest(rawKey);
+  if(g.id)groupIdMap.set(String(g.id),bucketId);
+  const bucket={id:bucketId,label:safeLabel(g.name,'그룹 '+(out.buckets.length+1)),fiveHour,weekly};
+  if(monthly&&monthly.remaining!==null)bucket.monthly=monthly;
+  out.buckets.push(bucket);
+ }
  for(const model of result?.userStatus?.cascadeModelConfigData?.clientModelConfigs||[]){
   const q=model?.quotaInfo;if(!q||typeof q!=='object')continue;
   const modelId=String(model.modelId||model.label||'unknown');
   // Only explicit shared identifiers dedupe models; equal percentages do not prove sharing.
   const identity=q.bucketId||q.quotaId||modelId;
   if(seen.has(identity))continue;seen.add(identity);
-  const rawLabel=String(model.label||model.modelId||'');
-  const label=/^[\w .()+:/-]{1,80}$/.test(rawLabel)&&!/(token|bearer|secret|csrf)/i.test(rawLabel)?rawLabel:'모델 '+(out.models.length+1);
-  out.models.push({id:'agy-'+digest(identity),label,remaining:percent(q.remainingFraction,100),resetsAt:reset(q.resetTime),period:'unconfirmed'});
+  const label=safeLabel(model.label||model.modelId,'모델 '+(out.models.length+1));
+  const mappedGroup=model.groupId&&groupIdMap.get(String(model.groupId));
+  const period=mappedGroup&&['5h','weekly','monthly'].includes(model.period)?model.period:'unconfirmed';
+  const item={id:'agy-'+digest(identity),label,remaining:percent(q.remainingFraction,100),resetsAt:reset(q.resetTime),period};
+  if(mappedGroup)item.groupId=mappedGroup;
+  out.models.push(item);
  }
- // GetUserStatus does not establish 5h/weekly periods. Never infer from model names.
- out.buckets=[{id:'agy-active',label:'기간 미확정 · 모델별 상세',fiveHour:emptyWindow(),weekly:emptyWindow()}];
+ // GetUserStatus does not establish 5h/weekly periods unless backed by confirmed usageGroups. Never infer from model names.
+ if(!out.buckets.length)out.buckets=[{id:'agy-active',label:'기간 미확정 · 모델별 상세',fiveHour:emptyWindow(),weekly:emptyWindow()}];
  return out;
 }
 export function readCodex({command='codex',timeout=8000,spawnProcess=spawn}={}) {
@@ -97,26 +125,42 @@ if not d:
  try:
   b=os.path.expanduser('~/.local/bin/agy')
   cmd=[b if os.path.exists(b) else 'agy','-p','/usage','--output-format','json']
-  out=subprocess.check_output(cmd,timeout=8,stderr=subprocess.DEVNULL).decode()
+  out=subprocess.check_output(cmd,timeout=12,stderr=subprocess.DEVNULL).decode()
   j=json.loads(out)
   models=[]
-  for g in j.get('command',{}).get('data',{}).get('groups',[]):
+  groups=[]
+  for idx,g in enumerate(j.get('command',{}).get('data',{}).get('groups',[])):
    desc=g.get('description','')
+   gname=g.get('name') or f'Group {idx+1}'
    m_names=[]
    if 'Models within this group:' in desc:
     m_names=[x.strip() for x in desc.split('Models within this group:')[1].split(',') if x.strip()]
-   elif g.get('name')=='Gemini 4 Argon':
-    m_names=['Gemini 4 Argon']
-   for mn in m_names:
-    for bk in g.get('buckets',[]):
-     models.append({'label':mn,'modelId':mn,'quotaInfo':{'remainingFraction':bk.get('remaining_fraction'),'resetTime':bk.get('reset_time')}})
-     break
-  if models: d={'userStatus':{'cascadeModelConfigData':{'clientModelConfigs':models}}}
+   elif g.get('name'):
+    m_names=[g.get('name')]
+   five_h=weekly=monthly=first_bk=None
+   for bk in g.get('buckets',[]):
+    info={'remainingFraction':bk.get('remaining_fraction'),'resetTime':bk.get('reset_time')}
+    if first_bk is None: first_bk=info
+    win=str(bk.get('window','')).lower()
+    if win in ('5h','5hour','five_hour','fivehour'): five_h=info
+    elif win in ('weekly','7d','week'): weekly=info
+    elif win in ('monthly','30d'): monthly=info
+   gid=f'group-{idx}-{gname}'
+   if five_h or weekly or monthly:
+    groups.append({'id':gid,'name':gname,'fiveHour':five_h,'weekly':weekly,'monthly':monthly,'models':m_names})
+   qinfo=five_h or weekly or monthly or first_bk
+   period='5h' if five_h else ('weekly' if weekly else ('monthly' if monthly else 'unconfirmed'))
+   if qinfo:
+    for mn in m_names:
+     models.append({'label':mn,'modelId':mn,'groupId':gid,'period':period,'quotaInfo':qinfo})
+  if models or groups: d={'usageGroups':groups,'userStatus':{'cascadeModelConfigData':{'clientModelConfigs':models}}}
  except Exception: pass
 if not d: raise RuntimeError('unavailable')
-models=d.get('userStatus',{}).get('cascadeModelConfigData',{}).get('clientModelConfigs',[])
-print(json.dumps({'planType':d.get('planType') or d.get('userStatus',{}).get('planType') or d.get('plan'),'userStatus':{'cascadeModelConfigData':{'clientModelConfigs':[{'label':x.get('label'),'modelId':x.get('modelId'),'quotaInfo':x.get('quotaInfo')} for x in models]}}}))`;
-export function readAgy({timeout=10000,spawnProcess=spawn}={}) {
+us=d.get('userStatus') or {}
+plan=d.get('planType') or us.get('planType') or d.get('plan') or (us.get('userTier') or {}).get('name') or ((us.get('planStatus') or {}).get('planInfo') or {}).get('planName')
+models=us.get('cascadeModelConfigData',{}).get('clientModelConfigs',[])
+print(json.dumps({'planType':plan,'usageGroups':d.get('usageGroups'),'userStatus':{'cascadeModelConfigData':{'clientModelConfigs':[{'label':x.get('label'),'modelId':x.get('modelId'),'groupId':x.get('groupId'),'period':x.get('period'),'quotaInfo':x.get('quotaInfo')} for x in models]}}}))`;
+export function readAgy({timeout=15000,spawnProcess=spawn}={}) {
  const env={...process.env,HOME:homedir(),PYTHONDONTWRITEBYTECODE:'1'};
  // The original helper supports an environment address. Never send CSRF outside loopback.
  if(env.ANTIGRAVITY_LS_ADDRESS&&!/^127\.0\.0\.1:\d{1,5}$/.test(env.ANTIGRAVITY_LS_ADDRESS))delete env.ANTIGRAVITY_LS_ADDRESS;
@@ -130,17 +174,18 @@ export function readAgy({timeout=10000,spawnProcess=spawn}={}) {
   child.on('close',code=>{if(code!==0){finish('unavailable');return;}try{finish(null,JSON.parse(text));}catch{finish('invalid-response');}});
  });
 }
-export function createQuotaReader({codex=readCodex,agy=readAgy,now=Date.now,ttl=QUOTA_TTL,staleAfter=QUOTA_STALE}={}) {
+export function createQuotaReader({codex=readCodex,agy=readAgy,now=Date.now,ttl=QUOTA_TTL,staleAfter=QUOTA_STALE,forceCooldown=5000}={}) {
  const cache=new Map();let inFlight,lastAttempt=-Infinity;
  const project=()=>({providers:['codex','agy'].map(provider=>{
   const entry=cache.get(provider)||{...base(provider),checkedAt:null,attemptedAt:null,error:null};
   return {...entry,stale:!!entry.error||!entry.checkedAt||now()-Date.parse(entry.checkedAt)>staleAfter};
  }),refreshAfterMs:Math.max(0,ttl-(now()-lastAttempt))});
+ const hasBucketValue=b=>[b.fiveHour,b.weekly,b.daily,b.monthly].some(w=>w&&w.remaining!==null);
  async function collect(provider,read,normalize){
   const attemptedAt=new Date(now()).toISOString();
   try{
    const value=normalize(await read());
-   if(!value.buckets.some(b=>[b.fiveHour,b.weekly].some(w=>w.remaining!==null))&&!value.models.some(m=>m.remaining!==null))throw Error('missing');
+   if(!value.buckets.some(hasBucketValue)&&!value.models.some(m=>m.remaining!==null))throw Error('missing');
    cache.set(provider,{...value,checkedAt:new Date(now()).toISOString(),attemptedAt,error:null});
   }catch{
    // Old values remain visibly stale/error-bound, never silently replaced with 100%.
@@ -148,9 +193,10 @@ export function createQuotaReader({codex=readCodex,agy=readAgy,now=Date.now,ttl=
    cache.set(provider,{...old,attemptedAt,error:'조회 실패 · 연결 또는 로그인 상태를 확인하세요'});
   }
  }
- return {async refresh(){
+ return {async refresh({force=false}={}) {
   if(inFlight){await inFlight;return project();}
-  if(now()-lastAttempt>=ttl){lastAttempt=now();inFlight=Promise.all([collect('codex',codex,normalizeCodex),collect('agy',agy,normalizeAgy)]).finally(()=>{inFlight=null;});await inFlight;}
+  const minInterval=force?Math.min(ttl,forceCooldown):ttl;
+  if(now()-lastAttempt>=minInterval){lastAttempt=now();inFlight=Promise.all([collect('codex',codex,normalizeCodex),collect('agy',agy,normalizeAgy)]).finally(()=>{inFlight=null;});await inFlight;}
   return project();
  }};
 }

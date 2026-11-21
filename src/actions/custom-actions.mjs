@@ -32,7 +32,12 @@ export function createCustomHandler({store,assets,dispatcher,macCatalog=createMa
    }
    if(route.startsWith('/api/assets/')&&req.method==='GET'){
     const id=route.slice('/api/assets/'.length);
-    if(!assetIdValid(id)||(await store.snapshot()).assets.includes(id)===false)throw layoutError(404,'게시되지 않은 이미지입니다.');
+    const reqUrl=new URL(req.url,'http://localhost');
+    const staged=local&&reqUrl.searchParams.get('staged')==='1';
+    if(!assetIdValid(id)||(!staged&&(await store.snapshot()).assets.includes(id)===false))throw layoutError(404,'게시되지 않은 이미지입니다.');
+    res.setHeader('ETag','"'+id+'"');
+    res.setHeader('Cache-Control','private, no-cache');
+    if(req.headers['if-none-match']==='"'+id+'"'){res.writeHead(304);res.end();return true;}
     const bytes=await assets.read(id);res.writeHead(200,{'Content-Type':'image/webp','Content-Length':bytes.length,'Content-Disposition':'inline'});res.end(bytes);return true;
    }
    if(route==='/api/actions/capabilities'&&req.method==='GET'){if(!local)throw layoutError(403,'수신기 정보는 PC 전용입니다.');send(res,200,await dispatcher.capabilities());return true;}
@@ -89,8 +94,9 @@ export function createCustomHandler({store,assets,dispatcher,macCatalog=createMa
    if(match&&req.method===(match[1]==='status'?'GET':'POST')){
     const [,operation,id]=match,run=runs.get(id);
     if(!run||(!local&&run.authority!==authority(req)))throw layoutError(404,'없는 실행입니다.');
-    const result=operation==='cancel'?dispatcher.cancel(id):local&&dispatcher.localStatus?dispatcher.localStatus(id):dispatcher.status(id);
-    send(res,200,await result);return true;
+    const result=await (operation==='cancel'?dispatcher.cancel(id):local&&dispatcher.localStatus?dispatcher.localStatus(id):dispatcher.status(id));
+    if(!result){runs.delete(id);throw layoutError(404,'만료되었거나 없는 실행입니다.');}
+    send(res,200,result);return true;
    }
    throw layoutError(404,'없는 사용자 동작 경로입니다.');
   }catch(error){send(res,error.status||409,{error:local&&error.status?error.message:'동작을 완료하지 못했습니다. PC에서 수신기/권한/저장 상태를 확인하세요.'});}

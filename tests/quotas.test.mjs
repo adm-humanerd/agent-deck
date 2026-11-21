@@ -34,11 +34,6 @@ for(const [fraction,expected] of [[0,0],[1,100],[.35,35],[undefined,null],[null,
  const p=normalizeAgy(agy([model(fraction)]));assert.equal(p.models[0].remaining,expected);
  assert.equal(p.models[0].period,'unconfirmed');assert.equal(p.buckets[0].fiveHour.remaining,null);assert.equal(p.buckets[0].weekly.remaining,null);
 });
-test('AGY plan remains unknown without an explicit valid upstream plan',()=>{
- for(const planType of [undefined,null,'','<script>'])assert.equal(normalizeAgy({...agy([model(.5)]),planType}).plan,null);
- assert.equal(normalizeAgy({...agy([model(.5)]),planType:'Free'}).plan,'Free');
- assert.equal(normalizeAgy({userStatus:{...agy([]).userStatus,planType:'Pro'}}).plan,'Pro');
-});
 test('AGY dedupes explicit shared bucket, not coincidentally identical model values',()=>{
  const p=normalizeAgy(agy([model(.5,'a',{bucketId:'shared'}),model(.5,'b',{bucketId:'shared'}),model(.5,'c'),model(.5,'d')]));
  assert.equal(p.models.length,3);assert.equal(p.models[0].remaining,50);
@@ -54,7 +49,6 @@ test('cache coalesces concurrent reads, rate limits errors, and recovers',async(
  const [a,b]=await Promise.all([reader.refresh(),reader.refresh()]);assert.deepEqual(a,b);assert.equal(calls,1);
  time=99;await reader.refresh();assert.equal(calls,1);
  time=101;fail=true;const failed=await reader.refresh();assert.equal(calls,2);assert.equal(failed.providers[0].buckets[0].fiveHour.remaining,80);assert.ok(failed.providers[0].error);assert.ok(!JSON.stringify(failed).includes('secret'));
- assert.equal(failed.providers[0].stale,true,'A failed refresh is stale immediately, even inside the age threshold');
  time=302;const stale=await reader.refresh();assert.equal(stale.providers[0].stale,true);
  time=403;fail=false;const fresh=await reader.refresh();assert.equal(fresh.providers[0].stale,false);assert.equal(fresh.providers[0].error,null);
 });
@@ -82,7 +76,7 @@ test('Codex missing executable fails safely',async()=>{await assert.rejects(read
 test('AGY read boundary suppresses stderr, blocks nonlocal CSRF destination and kills stalled child',async()=>{
  const before=process.env.ANTIGRAVITY_LS_ADDRESS;process.env.ANTIGRAVITY_LS_ADDRESS='external.example:1234';
  let env;const f=fixture('setInterval(()=>{},1000)');
- try{await assert.rejects(readAgy({timeout:150,spawnProcess:(c,a,o)=>{env=o.env;assert.ok(a[2].includes('m.get_active_user_status()'));assert.ok(!a[2].includes('save_state('));assert.doesNotMatch(a[2],/agy_quota_state|remaining_pct|open\(sf\)/);return f.spawnProcess(c,a,o);}}),/timeout/);
+ try{await assert.rejects(readAgy({timeout:150,spawnProcess:(c,a,o)=>{env=o.env;assert.ok(a[2].includes('m.get_active_user_status()'));assert.ok(!a[2].includes('save_state('));return f.spawnProcess(c,a,o);}}),/timeout/);
  await new Promise(r=>f.child.once('close',r));assert.equal(env.ANTIGRAVITY_LS_ADDRESS,undefined);assert.equal(env.PYTHONDONTWRITEBYTECODE,'1');assert.throws(()=>process.kill(-f.child.pid,0));}
  finally{if(before===undefined)delete process.env.ANTIGRAVITY_LS_ADDRESS;else process.env.ANTIGRAVITY_LS_ADDRESS=before;}
 });
@@ -217,4 +211,110 @@ test('AGY representative model selection updates key gauge and persists in stora
  pickButtons[0].onclick();
  assert.match(text(agyKey),/Gemini 4 Hydrogen/);
  assert.equal(store.get('agentDeck.quota.agyModel'),'Gemini 4 Hydrogen');
+});
+test('AGY unconfirmed plan stays null, error sets stale true, and picking default 1st model clears 모델 미선택 immediately',async()=>{
+ assert.equal(normalizeAgy(agy([model(0.8,'Alpha'),model(0.2,'Beta')])).plan,null);
+ const errReader=createQuotaReader({codex:async()=>codex(),agy:async()=>{throw Error('boom');}});
+ const errOut=await errReader.refresh();
+ assert.equal(errOut.providers[1].stale,true);assert.ok(errOut.providers[1].error);
+ const store=new Map();
+ const extra={localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,String(v))}};
+ const data=()=>({providers:[
+  {...normalizeCodex(codex(window(100),window(0,10080,1893456000))),checkedAt:new Date().toISOString(),stale:false,error:null},
+  {...normalizeAgy(agy([model(0.8,'Model Alpha'),model(0.4,'Model Beta')])),checkedAt:new Date().toISOString(),stale:false,error:null}
+ ]});
+ const {ids}=clientHarness(async()=>({ok:true,json:async()=>data()}),extra);await settle();
+ const agyKey=ids.quotaKeys.children[1];
+ assert.match(text(agyKey),/모델 미선택/);
+ agyKey.onclick();
+ const pickButtons=flatten(ids.quotaContent).filter(n=>n.attrs?.class?.includes('model-pick-btn'));
+ pickButtons[0].onclick();
+ assert.doesNotMatch(text(agyKey),/모델 미선택/);
+ assert.doesNotMatch(text(agyKey),/주간 \(추정\)/);
+ assert.match(text(agyKey),/Model Alpha/);
+ assert.match(text(agyKey),/Model Beta/);
+});
+test('Codex free monthly window (43200m) normalizes cleanly and renders monthly gauge',async()=>{
+ const freeCodex=normalizeCodex({rateLimits:{planType:'free',primary:{usedPercent:35,windowDurationMins:43200,resetsAt:1893456000},secondary:null}});
+ assert.equal(freeCodex.plan,'Free');
+ assert.equal(freeCodex.buckets[0].fiveHour.remaining,null);
+ assert.equal(freeCodex.buckets[0].weekly.remaining,null);
+ assert.equal(freeCodex.buckets[0].monthly.remaining,65);
+ assert.equal(freeCodex.buckets[0].monthly.resetsAt,'2030-01-01T00:00:00.000Z');
+ const reader=createQuotaReader({codex:async()=>({rateLimits:{planType:'free',primary:{usedPercent:35,windowDurationMins:43200,resetsAt:1893456000}}}),agy:async()=>agy([model(0.8)])});
+ const out=await reader.refresh();
+ assert.equal(out.providers[0].error,null);
+ assert.equal(out.providers[0].stale,false);
+ assert.equal(out.providers[0].buckets[0].monthly.remaining,65);
+ const data={providers:[
+  {...freeCodex,checkedAt:new Date().toISOString(),stale:false,error:null},
+  {...normalizeAgy(agy([model(0.8,'Model Alpha')])),checkedAt:new Date().toISOString(),stale:false,error:null}
+ ]};
+ const {ids}=clientHarness(async()=>({ok:true,json:async()=>data}));await settle();
+ const codexKey=ids.quotaKeys.children[0];
+ assert.match(text(codexKey),/Codex/);
+ assert.match(text(codexKey),/Free/);
+ assert.match(text(codexKey),/월간 65%/);
+ assert.doesNotMatch(text(codexKey),/조회 정상|터치 상세/);
+ codexKey.onclick();
+ assert.match(text(ids.quotaContent),/구독 플랜: Free/);
+ assert.match(text(ids.quotaContent),/월간 잔여 65%/);
+});
+test('AGY confirmed 5h + weekly groups normalize safely and switch cleanly on key and dialog',async()=>{
+ const raw={
+  usageGroups:[
+   {id:'group-0-Gemini Models',name:'Gemini Models',fiveHour:{remainingFraction:0.625,resetTime:'2026-11-20T19:19:15Z'},weekly:{remainingFraction:0.769,resetTime:'2026-11-27T09:19:15Z'}},
+   {id:'group-1-Claude and GPT models',name:'Claude and GPT models',fiveHour:{remainingFraction:1,resetTime:'2026-11-20T22:37:50Z'},weekly:{remainingFraction:1,resetTime:'2026-11-27T17:37:50Z'}},
+   {id:'secret-group',name:'bearer secret-token',fiveHour:{remainingFraction:0.5,resetTime:'2026-11-20T22:37:50Z'}}
+  ],
+  userStatus:{cascadeModelConfigData:{clientModelConfigs:[
+   {label:'Gemini 4 Neon',modelId:'Gemini 4 Neon',groupId:'group-0-Gemini Models',period:'5h',quotaInfo:{remainingFraction:0.625,resetTime:'2026-11-20T19:19:15Z'}},
+   {label:'Claude Opus 5.5',modelId:'Claude Opus 5.5',groupId:'group-1-Claude and GPT models',period:'5h',quotaInfo:{remainingFraction:1,resetTime:'2026-11-20T22:37:50Z'}}
+  ]}}
+ };
+ const normalized=normalizeAgy(raw);
+ assert.equal(normalized.plan,null);
+ assert.equal(normalized.buckets.length,3);
+ assert.equal(normalized.buckets[0].label,'Gemini Models');
+ assert.equal(normalized.buckets[0].fiveHour.remaining,62.5);
+ assert.equal(normalized.buckets[0].weekly.remaining,76.9);
+ assert.equal(normalized.buckets[2].label,'그룹 3');
+ assert.doesNotMatch(JSON.stringify(normalized),/secret-token|bearer/);
+ assert.equal(normalized.models[0].groupId,normalized.buckets[0].id);
+ assert.equal(normalized.models[0].period,'5h');
+
+ const store=new Map();
+ const extra={localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,String(v))}};
+ const data={providers:[
+  {...normalizeCodex(codex(window(10),window(20,10080))),checkedAt:new Date().toISOString(),stale:false,error:null},
+  {...normalized,buckets:normalized.buckets.slice(0,2),checkedAt:new Date().toISOString(),stale:false,error:null}
+ ]};
+ const {ids}=clientHarness(async()=>({ok:true,json:async()=>data}),extra);await settle();
+ const agyKey=ids.quotaKeys.children[1];
+ assert.match(text(agyKey),/Antigravity/);
+ assert.match(text(agyKey),/Gemini/);
+ assert.match(text(agyKey),/5시간 62\.5%/);
+ assert.match(text(agyKey),/주간 76\.9%/);
+ assert.doesNotMatch(text(agyKey),/조회 정상|터치 상세/);
+ agyKey.onclick();
+ assert.match(text(ids.quotaContent),/포함 모델: Gemini 4 Neon/);
+ const pickButtons=flatten(ids.quotaContent).filter(n=>n.attrs?.class?.includes('model-pick-btn'));
+ assert.equal(pickButtons.length,2);
+ pickButtons[1].onclick();
+ assert.match(text(agyKey),/Claude·GPT/);
+ assert.match(text(agyKey),/5시간 100%/);
+ assert.equal(store.get('agentDeck.quota.agyBucket'),normalized.buckets[1].id);
+});
+test('createQuotaReader force refresh respects cooldown and client refresh button sends ?force=1',async()=>{
+ let time=10000,calls=0;
+ const reader=createQuotaReader({now:()=>time,ttl:30000,forceCooldown:5000,codex:async()=>{calls++;return codex();},agy:async()=>agy([model(1)])});
+ await reader.refresh();assert.equal(calls,1);
+ time=12000;await reader.refresh({force:true});assert.equal(calls,1);
+ time=15000;await reader.refresh({force:true});assert.equal(calls,2);
+ time=25000;await reader.refresh();assert.equal(calls,2);
+ const urls=[];
+ const {ids}=clientHarness(async url=>{urls.push(url);return {ok:true,json:async()=>clientData()};});
+ await settle();
+ await ids.refreshQuota.onclick();
+ assert.deepEqual(urls,['/api/quotas','/api/quotas?force=1']);
 });

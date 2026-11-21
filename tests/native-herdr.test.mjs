@@ -42,3 +42,17 @@ test('native focus rejects stale target instead of falling back to TUI',async()=
 test('focus mismatch never reports success',async()=>{const n=createNativeHerdr(async args=>args[0]==='ls'?JSON.stringify(raw):JSON.stringify({focused_pane:'another'}));await assert.rejects(()=>n.focus({id:'native:t1'}),/확인하지/);});
 test('server routes use existing auth and origin checks; includes native respond route',async()=>{const s=await fs.readFile(new URL('../server.mjs',import.meta.url),'utf8');for(const route of ['/api/native/state','/api/native/focus','/api/native/respond']){assert.ok(s.indexOf("if(!auth(req))")<s.indexOf("route==='"+route+"'"));assert.ok(s.indexOf('req.headers.origin')<s.indexOf("route==='"+route+"'"));}});
 test('generated client is present, compiles, and includes native client',async()=>{const html=await fs.readFile(new URL('../src/deck/index.html',import.meta.url),'utf8');assert.ok(html.includes((await fs.readFile(new URL('../src/integrations/native-client.js',import.meta.url),'utf8')).trimEnd()));for(const s of html.matchAll(/<script>([\s\S]*?)<\/script>/g))new vm.Script(s[1]);});
+test('recursive nested sub_agents blocked discovery hydrates in parallel and supports respond',async()=>{
+ const nestedRaw={spaces:[{id:'s1',name:'Repo',machine:null,tabs:[{id:'tab1',name:'One',terminals:[{terminal:'t1',pane:'p1',app:'codex',status:'blocked',name:'Root',sub_agents:[{terminal:'t2',pane:'p2',app:'claude',status:'working',name:'Child',sub_agents:[{terminal:'t3',pane:'p3',app:'pi',status:'blocked',name:'Nested Pi',sub_agents:[]}]}]}]}]}]};
+ const hcCalls=[];
+ const n=createNativeHerdr(async()=>JSON.stringify(nestedRaw),async()=>{},async args=>{hcCalls.push(args);return 'Approve nested?\n> 1. Allow\n  2. Deny\n';});
+ const res=await n.refresh();
+ assert.equal(res.ok,true);
+ const nested=res.sessions.find(s=>s.terminal==='t3');
+ assert.ok(nested);assert.equal(nested.status,'blocked');assert.equal(nested.parent,'t2');assert.ok(nested.ticket);
+ assert.deepEqual(nested.choices.map(c=>c.label),['Allow','Deny']);
+ assert.deepEqual(hcCalls.filter(a=>a[0]==='read').map(a=>a[1]).sort(),['t1','t3']);
+ const r=await n.respond({id:nested.id,ticket:nested.ticket,key:'1'});
+ assert.equal(r.ok,true);
+ assert.ok(hcCalls.some(a=>a[0]==='keys'&&a[1]==='t3'&&a[2]==='1'));
+});

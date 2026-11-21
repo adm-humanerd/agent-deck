@@ -15,7 +15,7 @@ export const MAC_SYSTEM_CATALOG = Object.freeze([
   Object.freeze({action: 'media-prev', name: '이전 트랙', detail: '미디어 제어', symbol: 'media-prev'}),
   Object.freeze({action: 'dark-mode', name: '다크 모드 전환', detail: '화면 스타일', symbol: 'dark-mode'}),
   Object.freeze({action: 'screenshot', name: '영역 스크린샷', detail: '클립보드 복사', symbol: 'screenshot'}),
-  Object.freeze({action: 'screen-lock', name: '화면 잠금', detail: '디스플레이 끄기', symbol: 'lock'}),
+  Object.freeze({action: 'screen-lock', name: '화면 잠금', detail: '디스플레이 잠자기', symbol: 'lock'}),
   Object.freeze({action: 'mission-control', name: '미션 컨트롤', detail: '창 한눈에 보기', symbol: 'app'}),
   Object.freeze({action: 'finder', name: 'Finder 열기', detail: '파일 관리자', symbol: 'folder'}),
   Object.freeze({action: 'downloads', name: '다운로드 폴더', detail: 'Finder 열기', symbol: 'folder'})
@@ -109,11 +109,11 @@ export function resolveMacSystemCommand(action, env = process.env) {
     case 'volume-mute':
       return {command: '/usr/bin/osascript', args: ['-e', 'set volume output muted (not (output muted of (get volume settings)))'], handoff: false};
     case 'media-play-pause':
-      return {command: '/usr/bin/osascript', args: ['-e', 'if application "Spotify" is running then\ntell application "Spotify" to playpause\nelse if application "Music" is running then\ntell application "Music" to playpause\nelse\nerror "실행 중인 음악 앱(Music/Spotify)이 없습니다."\nend if'], handoff: false};
+      return {command: '/usr/bin/osascript', args: ['-e', 'if application "Spotify" is running then\ntell application "Spotify" to playpause\nelse if application "Music" is running then\ntell application "Music" to playpause\nelse if application "TV" is running then\ntell application "TV" to playpause\nelse\nerror "실행 중인 음악/미디어 앱(Music/Spotify/TV)이 없습니다."\nend if'], handoff: false};
     case 'media-next':
-      return {command: '/usr/bin/osascript', args: ['-e', 'if application "Spotify" is running then\ntell application "Spotify" to next track\nelse if application "Music" is running then\ntell application "Music" to next track\nelse\nerror "실행 중인 음악 앱(Music/Spotify)이 없습니다."\nend if'], handoff: false};
+      return {command: '/usr/bin/osascript', args: ['-e', 'if application "Spotify" is running then\ntell application "Spotify" to next track\nelse if application "Music" is running then\ntell application "Music" to next track\nelse if application "TV" is running then\ntell application "TV" to next track\nelse\nerror "실행 중인 음악/미디어 앱(Music/Spotify/TV)이 없습니다."\nend if'], handoff: false};
     case 'media-prev':
-      return {command: '/usr/bin/osascript', args: ['-e', 'if application "Spotify" is running then\ntell application "Spotify" to previous track\nelse if application "Music" is running then\ntell application "Music" to previous track\nelse\nerror "실행 중인 음악 앱(Music/Spotify)이 없습니다."\nend if'], handoff: false};
+      return {command: '/usr/bin/osascript', args: ['-e', 'if application "Spotify" is running then\ntell application "Spotify" to previous track\nelse if application "Music" is running then\ntell application "Music" to previous track\nelse if application "TV" is running then\ntell application "TV" to previous track\nelse\nerror "실행 중인 음악/미디어 앱(Music/Spotify/TV)이 없습니다."\nend if'], handoff: false};
     case 'dark-mode':
       return {command: '/usr/bin/osascript', args: ['-e', 'tell application "System Events" to tell appearance preferences to set dark mode to not dark mode'], handoff: false};
     case 'screenshot':
@@ -303,6 +303,31 @@ export function createMacCatalog(options = {}) {
     throw httpError(404, '앱 아이콘 파일을 찾을 수 없습니다.');
   }
 
+  async function extractIconWithNsWorkspace(appPath, outPath) {
+    const jxa = [
+      'ObjC.import("AppKit");',
+      'const env = $.NSProcessInfo.processInfo.environment;',
+      'const app = ObjC.unwrap(env.objectForKey("DECK_ICON_APP"));',
+      'const out = ObjC.unwrap(env.objectForKey("DECK_ICON_OUT"));',
+      'const icon = $.NSWorkspace.sharedWorkspace.iconForFile(app);',
+      'icon.size = {width: 128, height: 128};',
+      'const rep = $.NSBitmapImageRep.alloc.initWithBitmapDataPlanesPixelsWidePixelsHighBitsPerSampleSamplesPerPixelHasAlphaIsPlanarColorSpaceNameBytesPerRowBitsPerPixel(null, 128, 128, 8, 4, true, false, $.NSCalibratedRGBColorSpace, 0, 0);',
+      'rep.size = {width: 128, height: 128};',
+      'const ctx = $.NSGraphicsContext.graphicsContextWithBitmapImageRep(rep);',
+      '$.NSGraphicsContext.saveGraphicsState;',
+      '$.NSGraphicsContext.setCurrentContext(ctx);',
+      'icon.drawInRectFromRectOperationFraction({origin: {x: 0, y: 0}, size: {width: 128, height: 128}}, $.NSZeroRect, $.NSCompositingOperationSourceOver, 1.0);',
+      'ctx.flushGraphics;',
+      '$.NSGraphicsContext.restoreGraphicsState;',
+      'const data = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $({}));',
+      'if (!data || !data.writeToFileAtomically(out, true)) throw new Error("nsworkspace icon export failed");'
+    ].join(' ');
+    await runExec('/usr/bin/osascript', ['-l', 'JavaScript', '-e', jxa], {
+      timeout: 10000,
+      env: {...process.env, DECK_ICON_APP: appPath, DECK_ICON_OUT: outPath}
+    });
+  }
+
   async function extractAppIconPng(appPath) {
     if (platform !== 'darwin') {
       throw httpError(400, 'macOS에서만 앱 아이콘을 추출할 수 있습니다.');
@@ -320,14 +345,29 @@ export function createMacCatalog(options = {}) {
       throw httpError(404, '설치된 앱 목록에서 찾을 수 없습니다.');
     }
 
-    const icnsPath = await resolveIcnsPath(matched.app);
     const dir = await fs.mkdtemp(path.join(tempDir, 'deck-mac-icon-'));
     try {
       const outPath = path.join(dir, 'icon.png');
+      let icnsErr = null;
+      let icnsPath = null;
       try {
-        await runExec('/usr/bin/sips', ['-s', 'format', 'png', '-z', '128', '128', icnsPath, '--out', outPath], {timeout: 10000});
-      } catch {
-        throw httpError(422, '앱 아이콘을 PNG로 변환하지 못했습니다.');
+        icnsPath = await resolveIcnsPath(matched.app);
+      } catch (err) {
+        if (err?.status === 400) throw err;
+        icnsErr = err;
+      }
+      if (icnsPath) {
+        try {
+          await runExec('/usr/bin/sips', ['-s', 'format', 'png', '-z', '128', '128', icnsPath, '--out', outPath], {timeout: 10000});
+        } catch {
+          throw httpError(422, '앱 아이콘을 PNG로 변환하지 못했습니다.');
+        }
+      } else {
+        try {
+          await extractIconWithNsWorkspace(matched.app, outPath);
+        } catch {
+          throw icnsErr || httpError(404, '앱 아이콘 파일을 찾을 수 없습니다.');
+        }
       }
       const bytes = await fs.readFile(outPath);
       if (!Buffer.isBuffer(bytes) || bytes.length === 0) {

@@ -38,8 +38,8 @@ test('real macOS paired browser authoring and stored idle session submission wit
   browser=await chromium.launch({headless:true,executablePath});const pc=await browser.newPage({viewport:{width:1280,height:800}}),paired=await browser.newPage({viewport:{width:1024,height:768},hasTouch:true});
   const errors=[];for(const page of [pc,paired])page.on('pageerror',error=>errors.push(error.message));
   await pc.goto(`http://127.0.0.1:${port}`);await pc.waitForFunction(()=>deckLocal&&layoutRevision===1);
-  await pc.locator('#editDeck').click();await pc.locator('#keys button[data-key-id]').nth(0).click();
-  await pc.locator('#customLabel').fill('Real exact shell');await pc.locator('#customKind').selectOption('sessionText');await pc.locator('#customTarget').fill('fixture-shell');
+  if(!await pc.evaluate(()=>deckEditing))await pc.locator('#editDeck').click();await pc.locator('#keys button[data-key-id]').nth(0).click();
+  await pc.locator('#customLabel').fill('Real exact shell');await pc.locator('#modeTabAutomation').click();await pc.locator('#customKind').selectOption('sessionText');await pc.locator('#customTarget').fill('fixture-shell');
   const output=path.join(dir,'result');const command=`printf NATIVE_BROWSER_OK > '${output}'`;
   await pc.locator('#customText').fill(command);await pc.locator('#customSubmit').check();await pc.locator('#customTrusted').check();await pc.locator('#saveAssignment').click();await pc.waitForFunction(()=>layoutRevision===2&&!layoutSaving);
   assert.equal(builtins,0);await assert.rejects(readFile(output),{code:'ENOENT'});steps.push({name:'PC authoring/save is inert',verdict:'passed'});

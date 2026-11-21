@@ -211,3 +211,17 @@ for(const pause of ['before','after'])test(`stage process death ${pause} rename 
  await restarted.verify([original.id]);assert.deepEqual(await fs.readdir(directory),beforeRead);await assert.rejects(restarted.stage(bytes),{status:423});
  assert.deepEqual(JSON.parse(await fs.readFile(canonical,'utf8')).assets,[original.id]);
 });
+test('store.prune removes only unreferenced 64-hex assets safely under lock',async t=>{
+ const {directory,store}=await fixture(t);
+ const kept=await store.stage(await raster('png',8,8,'red'));
+ const orphan=await store.stage(await raster('png',8,8,'blue'));
+ await fs.writeFile(join(directory,'.keep.tmp'),'temp',{mode:0o600});
+ const res=await store.prune([kept.id]);
+ assert.equal(res.removed,1);assert.ok(res.bytesFreed>0);assert.ok(res.remainingBytes>0);
+ assert.ok((await store.read(kept.id)).length>0);
+ await assert.rejects(store.read(orphan.id),{status:404});
+ assert.equal(await fs.readFile(join(directory,'.keep.tmp'),'utf8'),'temp');
+ await assert.rejects(store.prune(['../bad']),{status:400});
+ await fs.writeFile(join(directory,'.stage.lock'),'locked',{mode:0o600});
+ await assert.rejects(store.prune([kept.id]),{status:423});
+});

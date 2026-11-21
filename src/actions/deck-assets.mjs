@@ -1,7 +1,9 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {mkdir,open,readFile,rename,readdir,lstat,unlink} from 'node:fs/promises';
 import {join} from 'node:path';
+import {pathToFileURL,fileURLToPath} from 'node:url';
 import sharp from 'sharp';
+import {createLayoutStore} from '../deck/shared-layout.mjs';
 
 export const MAX_IMAGE_BYTES=1024*1024,MAX_ASSET_BYTES=32*1024*1024;
 export const MAX_IMAGE_DIMENSION=1024,MAX_DECODED_BYTES=4*1024*1024;
@@ -74,11 +76,39 @@ export function createAssetStore(directory,io={}){
    const pending=queue.then(work);queue=pending.catch(()=>{});return pending;
   },
   async read(id){if(!assetIdValid(id))throw fail(404,'없는 이미지입니다.');try{requirePrivate(await fs.lstat(join(directory,id)));return await fs.readFile(join(directory,id));}catch(error){if(error.code==='ENOENT')throw fail(404,'없는 이미지입니다.');throw error;}},
-  async verify(ids){for(const id of ids)await this.read(id);}
+  async verify(ids){for(const id of ids)await this.read(id);},
+  async prune(referencedIds){
+   if(!Array.isArray(referencedIds)||referencedIds.some(id=>!assetIdValid(id)))throw fail(400,'올바른 참조 이미지 목록이 필요합니다.');
+   const work=async()=>{
+    let dirInfo;
+    try{dirInfo=await fs.lstat(directory);}catch(error){if(error.code==='ENOENT')return {removed:0,bytesFreed:0,remainingBytes:0};throw error;}
+    requirePrivate(dirInfo,true);
+    const lock=join(directory,'.stage.lock');let lockHandle;
+    try{lockHandle=await fs.open(lock,'wx',0o600);}catch(error){if(error.code==='EEXIST')throw fail(423,'이미지 저장소가 잠겨 있습니다. 원본을 보존하고 잠금을 확인하세요.');throw error;}
+    try{
+     requirePrivate(await lockHandle.stat());await lockHandle.sync();
+     const keep=new Set(referencedIds),files=await fs.readdir(directory);
+     let removed=0,bytesFreed=0,remainingBytes=0;
+     for(const name of files)if(assetIdValid(name)){
+      const full=join(directory,name),stored=await fs.lstat(full);requirePrivate(stored);
+      if(keep.has(name)){remainingBytes+=stored.size;}
+      else{await fs.unlink(full);removed++;bytesFreed+=stored.size;}
+     }
+     return {removed,bytesFreed,remainingBytes};
+    }finally{try{await lockHandle.close();}finally{await fs.unlink(lock);}}
+   };
+   const pending=queue.then(work);queue=pending.catch(()=>{});return pending;
+  }
  };
 }
 export async function readImageBody(req){
  let size=0;const chunks=[];
  for await(const chunk of req){size+=chunk.length;if(size>MAX_IMAGE_BYTES)throw fail(413,'이미지 업로드는 1MiB 한도입니다.');chunks.push(chunk);}
  return Buffer.concat(chunks);
+}
+if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
+ if(process.argv.length!==3||process.argv[2]!=='--prune')throw Error('Explicit asset cleanup requires: node src/actions/deck-assets.mjs --prune');
+ const snapshot=await createLayoutStore(new URL('../../.deck-layout.json',import.meta.url)).snapshot();
+ const store=createAssetStore(fileURLToPath(new URL('../../.deck-assets',import.meta.url)));
+ console.log(JSON.stringify(await store.prune(snapshot.assets)));
 }

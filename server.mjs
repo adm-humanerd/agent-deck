@@ -1,8 +1,9 @@
 import http from 'node:http';
-import {readFile,writeFile} from 'node:fs/promises';
+import {readFile,stat,writeFile} from 'node:fs/promises';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {randomInt,timingSafeEqual} from 'node:crypto';
+import {gzipSync} from 'node:zlib';
 import {pathToFileURL,fileURLToPath} from 'node:url';
 import {connectionAddresses,allowedHost,createSessions,sessionCookie} from './src/host/connections.mjs';
 import {createBridge} from './src/integrations/bridge.mjs';
@@ -24,11 +25,26 @@ export function local(req,listenPort=port){return localManagement(req,listenPort
 export {sameOrigin};
 function deviceToken(req){return (req.headers.cookie||'').match(/(?:^|; )deck=([a-f0-9]+)/)?.[1];}
 function send(res,status,obj){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(obj));}
-async function body(req){let text='';for await(const c of req){text+=c;if(text.length>2048)throw new Error('요청이 너무 큽니다.');}return JSON.parse(text||'{}');}
+async function body(req){const chunks=[];let size=0;for await(const c of req){const b=Buffer.isBuffer(c)?c:Buffer.from(c);size+=b.length;if(size>2048)throw Object.assign(new Error('요청이 너무 큽니다.'),{status:413});chunks.push(b);}try{return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');}catch{throw Object.assign(new Error('올바른 JSON 요청이 필요합니다.'),{status:400});}}
+let htmlCache=null;
+async function cachedHtml(){
+ const st=await stat(htmlPath);
+ if(!htmlCache||htmlCache.mtimeMs!==st.mtimeMs||htmlCache.size!==st.size){
+  const raw=await readFile(htmlPath);
+  htmlCache={mtimeMs:st.mtimeMs,size:st.size,raw,gzip:gzipSync(raw)};
+ }
+ return htmlCache;
+}
+function remoteSafeError(e){
+ const msg=String(e?.message||'');
+ if(!e?.status&&(e?.code||/\/Users\/|\/Volumes\/|\/tmp\/|ENOENT|EACCES|EPERM|\n/.test(msg)))return '요청을 처리하지 못했습니다. 맥에서 연결 및 도구 상태를 확인하세요.';
+ return msg||'요청을 처리하지 못했습니다.';
+}
 export function createRequestHandler({sessions,layouts=createLayoutStore(),assets=createAssetStore(fileURLToPath(new URL('./.deck-assets',import.meta.url))),dispatcher=createHostDispatcher(),macCatalog=createMacCatalog(),bridge,network,nativeHerdr,quotas,pin=String(randomInt(100000,1000000)),listenPort=port,addresses=()=>connectionAddresses(undefined,listenPort)}){
-const attempts=new Map();
-const isLocal=req=>local(req,listenPort);
-function auth(req){if(isLocal(req))return true;try{return sessions.has(deviceToken(req));}catch{return false;}}
+const attempts=new Map(),authMemo=new WeakMap(),localMemo=new WeakMap();
+let currentPin=String(pin);
+const isLocal=req=>{if(localMemo.has(req))return localMemo.get(req);const ok=Boolean(req.socket)&&local(req,listenPort);localMemo.set(req,ok);return ok;};
+function auth(req){if(isLocal(req))return true;if(authMemo.has(req))return authMemo.get(req);try{const ok=sessions.has(deviceToken(req));authMemo.set(req,ok);return ok;}catch{return false;}}
 const handleLayout=createLayoutHandler({store:layouts,auth,port:listenPort});
 const handleCustom=createCustomHandler({store:layouts,assets,dispatcher,macCatalog,auth,authority:req=>isLocal(req)?'local':deviceToken(req),admitAuthority:(req,enter)=>{
  if(isLocal(req))return {effect:enter()};
@@ -38,24 +54,31 @@ const handleCustom=createCustomHandler({store:layouts,assets,dispatcher,macCatal
 let inFlight;
 function state(){if(!inFlight)inFlight=bridge.refresh().finally(()=>inFlight=null);return inFlight;}
 return async(req,res)=>{
+ isLocal(req);
  res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('X-Frame-Options','DENY');
  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'");
  const connections=addresses();
  if(!allowedHost(req.headers.host,connections,listenPort)){send(res,403,{error:'허용되지 않은 호스트'});return;}
- const route=new URL(req.url,'http://'+req.headers.host).pathname;
+ let route,urlObj;
+ try{urlObj=new URL(req.url,'http://'+req.headers.host);route=urlObj.pathname;}catch{send(res,400,{error:'잘못된 요청 경로입니다.'});return;}
  if(['POST','PUT','PATCH','DELETE'].includes(req.method)&&!sameOrigin(req)){send(res,403,{error:'다른 사이트에서 보낸 요청은 차단됩니다.'});return;}
  if(route.startsWith('/api/devices/')&&['POST','PUT','PATCH','DELETE'].includes(req.method)&&!isLocal(req)){send(res,403,{error:'기기 관리는 맥의 localhost 화면에서만 가능합니다.'});return;}
  try {
   if(route==='/api/layout'&&req.method==='PUT'){await handleLayout(req,res);return;}
   if(!isLocal(req)&&auth(req))res.setHeader('Set-Cookie',sessionCookie(deviceToken(req)));
-  if(route==='/'&&req.method==='GET'){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(await readFile(htmlPath));return;}
+  if(route==='/'&&req.method==='GET'){
+   const page=await cachedHtml();
+   const acceptsGzip=/\bgzip\b/i.test(req.headers['accept-encoding']||'');
+   res.writeHead(200,{'Content-Type':'text/html; charset=utf-8',...(acceptsGzip?{'Content-Encoding':'gzip','Vary':'Accept-Encoding'}:{})});
+   res.end(acceptsGzip?page.gzip:page.raw);return;
+  }
   if(route==='/api/runtimes'&&req.method==='GET'){const list=await detectAvailableRuntimes();send(res,200,{ok:true,runtimes:list,active:list[0]?.id||null});return;}
-  if(route==='/api/info'&&req.method==='GET'){send(res,200,{paired:auth(req),local:isLocal(req),urls:isLocal(req)?connections.map(x=>x.url):[],connections:isLocal(req)?connections:[],pairCode:isLocal(req)?pin:undefined,registrationPolicy:'until-revoked',registeredDevices:isLocal(req)?sessions.count():undefined});return;}
+  if(route==='/api/info'&&req.method==='GET'){send(res,200,{paired:auth(req),local:isLocal(req),urls:isLocal(req)?connections.map(x=>x.url):[],connections:isLocal(req)?connections:[],pairCode:isLocal(req)?currentPin:undefined,registrationPolicy:'until-revoked',registeredDevices:isLocal(req)?sessions.count():undefined});return;}
   if(route==='/api/pair'&&req.method==='POST'){
     const ip=req.socket.remoteAddress,now=Date.now(),entry=attempts.get(ip)||{count:0,since:now};
     if(now-entry.since>300000){entry.count=0;entry.since=now;}entry.count++;attempts.set(ip,entry);
     if(entry.count>8){send(res,429,{error:'잠시 후 다시 연결하세요.'});return;}
-    const {code}=await body(req),b=Buffer.from(String(code||'')),p=Buffer.from(pin);
+    const {code}=await body(req),b=Buffer.from(String(code||'')),p=Buffer.from(currentPin);
     if(b.length!==p.length||!timingSafeEqual(b,p)){send(res,403,{error:'연결 코드가 맞지 않습니다.'});return;}
     const token=await sessions.issue();
     res.setHeader('Set-Cookie',sessionCookie(token));
@@ -65,10 +88,18 @@ return async(req,res)=>{
     if(!isLocal(req)){send(res,403,{error:'기기 등록 해제는 맥의 localhost 화면에서만 가능합니다.'});return;}
     await sessions.revokeAll();handleCustom.revoke();send(res,200,{ok:true});return;
   }
+  if(route==='/api/devices/rotate-pin'&&req.method==='POST'){
+    if(!isLocal(req)){send(res,403,{error:'연결 코드 재발급은 맥의 localhost 화면에서만 가능합니다.'});return;}
+    currentPin=String(randomInt(100000,1000000));attempts.clear();send(res,200,{ok:true,pairCode:currentPin});return;
+  }
   if(await handleLayout(req,res))return;
   if(await handleCustom(req,res))return;
   if(!auth(req)){send(res,401,{error:'먼저 맥 화면의 연결 코드로 연결하세요.'});return;}
-  if(route==='/api/quotas'&&req.method==='GET'){send(res,200,await quotas.refresh());return;}
+  if(route==='/api/quotas'&&req.method==='GET'){
+   const force=urlObj.searchParams.get('force')==='1';
+   send(res,200,await (force?quotas.refresh({force:true}):quotas.refresh()));
+   return;
+  }
   if(route==='/api/state'&&req.method==='GET'){send(res,200,await state());return;}
   if(route==='/api/native/state'&&req.method==='GET'){send(res,200,await nativeHerdr.refresh());return;}
   if(route==='/api/native/focus'&&req.method==='POST'){send(res,200,await nativeHerdr.focus(await body(req)));return;}
@@ -77,7 +108,7 @@ return async(req,res)=>{
   if(route==='/api/focus'&&req.method==='POST'){const data=await body(req);send(res,200,await bridge.focus(data));return;}
   if(route==='/api/respond'&&req.method==='POST'){const data=await body(req);send(res,200,await bridge.respond(data));return;}
   send(res,404,{error:'Not found'});
- }catch(e){send(res,e.status||(route==='/api/layout'?500:409),{error:e.message});}
+ }catch(e){send(res,e.status||(route==='/api/layout'?500:409),{error:isLocal(req)?e.message:remoteSafeError(e)});}
 };
 }
 export async function startServer(){

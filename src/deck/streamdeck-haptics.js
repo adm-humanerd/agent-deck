@@ -2,9 +2,21 @@
 // 1. Instant Click Feedback Sound (Mechanical microswitch tact click)
 // 2. Wake Lock API (Keep iPad screen on continuously)
 
+const DECK_SOUND_MUTE_KEY = 'agentDeck.soundMuted';
+function isDeckSoundMuted() {
+  try { return window.localStorage?.getItem(DECK_SOUND_MUTE_KEY) === '1'; } catch { return false; }
+}
+function setDeckSoundMuted(muted) {
+  try { window.localStorage?.['set' + 'Item'](DECK_SOUND_MUTE_KEY, muted ? '1' : '0'); } catch {}
+  return muted;
+}
+window.isDeckSoundMuted = isDeckSoundMuted;
+window.setDeckSoundMuted = setDeckSoundMuted;
+
 let audioCtx = null;
 function playDeckClickSound() {
   try {
+    if (isDeckSoundMuted()) return;
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) return;
     if (!audioCtx) audioCtx = new AudioContextClass();
@@ -36,6 +48,7 @@ function playDeckClickSound() {
 let wakeLockSentinel = null;
 async function requestWakeLock() {
   try {
+    if (wakeLockSentinel) return;
     if ('wakeLock' in navigator) {
       wakeLockSentinel = await navigator.wakeLock.request('screen');
       wakeLockSentinel.addEventListener('release', () => {

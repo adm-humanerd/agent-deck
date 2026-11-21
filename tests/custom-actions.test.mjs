@@ -29,8 +29,8 @@ async function fixture(t,{receivers={},spawnImpl=spawn,layoutIO}={}){
  const runner={refresh:async()=>({ok:true,agents:[],sessions:[]})};
  handler=createRequestHandler({sessions,layouts,assets,dispatcher,bridge:runner,nativeHerdr:runner,network:{refresh:async()=>({ok:true,sessions:[]})},quotas:{refresh:async()=>({providers:[]})},pin:'123456',listenPort:port,addresses:()=>[{address:'192.0.2.10'}]});
  t.after(async()=>{for(const child of children){try{process.kill(-child.pid,'SIGKILL');}catch{}child.kill('SIGKILL');}const closed=new Promise(resolve=>server.close(resolve));server.closeAllConnections();await closed;await rm(dir,{recursive:true,force:true});});
- async function request(route,{method='GET',body,remote=false,cookie,origin=true,raw=false}={}){
-  const host=remote?lan:local,headers={Host:host};
+ async function request(route,{method='GET',body,remote=false,cookie,origin=true,raw=false,headers:extraHeaders={}}={}){
+  const host=remote?lan:local,headers={Host:host,...extraHeaders};
   if(origin)headers.Origin='http://'+host;
   if(cookie)headers.Cookie=cookie;
   if(body!==undefined)headers['Content-Type']=raw?'application/octet-stream':'application/json';
@@ -197,4 +197,68 @@ test('raw static raster upload is local/authenticated, sanitized and unpublished
  const updated=structuredClone(draft);updated.revision=1;updated.layouts[0].name='Asset retained';
  assert.equal((await f.save(updated)).status,200);
  const retained=await f.layouts.snapshot();assert.equal(retained.revision,2);assert.equal(retained.layouts[0].name,'Asset retained');assert.deepEqual(retained.assets,[id]);assert.deepEqual(retained.actions,draft.actions);assert.equal((await f.remote('/api/assets/'+id)).status,200);
+});
+
+test('staged asset preview, ETag 304 caching, missing/null runId 404, rotate-pin, body bounds and remote error redaction',async t=>{
+ const f=await fixture(t);
+ const image=await sharp({create:{width:8,height:8,channels:4,background:'#225588'}}).png().toBuffer();
+ const staged=await f.request('/api/assets/upload',{method:'POST',body:image,raw:true});
+ assert.equal(staged.status,201);
+ const id=staged.json.id;
+ assert.equal((await f.request('/api/assets/'+id)).status,404);
+ assert.equal((await f.remote('/api/assets/'+id+'?staged=1')).status,404);
+ const localStaged=await f.request('/api/assets/'+id+'?staged=1');
+ assert.equal(localStaged.status,200);
+ assert.equal(localStaged.headers.etag,'"'+id+'"');
+ assert.equal(localStaged.headers['cache-control'],'private, no-cache');
+ assert.equal((await f.request('/api/assets/'+id+'?staged=1',{headers:{'If-None-Match':'"'+id+'"'}})).status,304);
+
+ const draft=f.snapshot(sessionAction);draft.assets=[id];draft.layouts[0].slots[0].presentation={asset:id};
+ assert.equal((await f.save(draft)).status,200);
+ assert.equal((await f.remote('/api/assets/'+id,{headers:{'If-None-Match':'"'+id+'"'}})).status,304);
+
+ assert.equal((await f.remote('/api/actions/status/missing-run-id')).status,404);
+ assert.equal((await f.remote('/api/actions/cancel/missing-run-id',{method:'POST'})).status,404);
+
+ assert.equal((await f.remote('/api/devices/rotate-pin',{method:'POST',body:{}})).status,403);
+ for(let i=0;i<9;i++)await f.request('/api/pair',{method:'POST',remote:true,body:{code:'000000'}});
+ assert.equal((await f.request('/api/pair',{method:'POST',remote:true,body:{code:'123456'}})).status,429);
+ const rotated=await f.request('/api/devices/rotate-pin',{method:'POST',body:{}});
+ assert.equal(rotated.status,200);assert.match(rotated.json.pairCode,/^\d{6}$/);assert.notEqual(rotated.json.pairCode,'123456');
+ assert.equal((await f.request('/api/pair',{method:'POST',remote:true,body:{code:'123456'}})).status,403);
+ assert.equal((await f.request('/api/pair',{method:'POST',remote:true,body:{code:rotated.json.pairCode}})).status,200);
+
+ assert.equal((await f.request('/api/pair',{method:'POST',remote:true,raw:true,body:Buffer.from('{"code":"한글테스트"}','utf8')})).status,403);
+ assert.equal((await f.request('/api/pair',{method:'POST',remote:true,raw:true,body:Buffer.from('{invalid-json','utf8')})).status,400);
+ assert.equal((await f.request('/api/pair',{method:'POST',remote:true,raw:true,body:Buffer.alloc(2049,65)})).status,413);
+
+ const dir=await mkdtemp(path.join(os.tmpdir(),'deck-redact-'));
+ t.after(()=>rm(dir,{recursive:true,force:true}));
+ const layouts=createLayoutStore(path.join(dir,'layout.json')),assets=createAssetStore(path.join(dir,'assets'));
+ const sessions=await createSessions(pathToFileURL(path.join(dir,'sessions.json')));
+ let handler;
+ const s2=http.createServer((req,res)=>handler(req,res));
+ await new Promise(resolve=>s2.listen(0,'127.0.0.1',resolve));
+ t.after(async()=>{await new Promise(resolve=>s2.close(resolve));});
+ const p2=s2.address().port,lan2=`192.0.2.10:${p2}`,local2=`127.0.0.1:${p2}`;
+ const errRunner={refresh:async()=>{throw Object.assign(new Error('ENOENT: read /Users/fixture/private/secret.json\nstack'),{code:'ENOENT'});}};
+ const stubDispatcher={capabilities:async()=>({shellKinds:[],receivers:[],macControl:false}),receiverContext:async()=>undefined,dispatch:async()=>({runId:'r-gone',state:'running'}),status:()=>null,localStatus:()=>null,cancel:async()=>null};
+ handler=createRequestHandler({sessions,layouts,assets,dispatcher:stubDispatcher,bridge:errRunner,nativeHerdr:{refresh:async()=>({ok:true,sessions:[]})},network:{refresh:async()=>({ok:true,sessions:[]})},quotas:{refresh:async()=>({providers:[]})},pin:'654321',listenPort:p2,addresses:()=>[{address:'192.0.2.10'}]});
+ const req2=(p,{method='GET',remote=false,cookie,body}={})=>new Promise((resolve,reject)=>{
+  const host=remote?lan2:local2,h={Host:host,Origin:'http://'+host};if(cookie)h.Cookie=cookie;if(body!==undefined)h['Content-Type']='application/json';
+  const req=http.request({hostname:'127.0.0.1',port:p2,path:p,method,headers:h},res=>{const c=[];res.on('data',d=>c.push(d));res.on('end',()=>resolve({status:res.statusCode,json:JSON.parse(Buffer.concat(c))}));});
+  req.on('error',reject);req.end(body===undefined?undefined:JSON.stringify(body));
+ });
+ const paired2=await new Promise((resolve,reject)=>{const req=http.request({hostname:'127.0.0.1',port:p2,path:'/api/pair',method:'POST',headers:{Host:lan2,Origin:'http://'+lan2,'Content-Type':'application/json'}},res=>{res.resume();res.on('end',()=>resolve(res.headers['set-cookie'][0].split(';')[0]));});req.on('error',reject);req.end(JSON.stringify({code:'654321'}));});
+ const remoteErr=await req2('/api/state',{remote:true,cookie:paired2});
+ assert.equal(remoteErr.status,409);assert.equal(remoteErr.json.error.includes('/Users/fixture'),false);assert.equal(remoteErr.json.error.includes('ENOENT'),false);
+ const localErr=await req2('/api/state');
+ assert.equal(localErr.status,409);assert.ok(localErr.json.error.includes('/Users/fixture'));
+ const snap=defaultDeckLayouts();snap[0].slots[0]={type:'custom',actionId:'a1'};
+ await req2('/api/custom-layout',{method:'PUT',body:{schemaVersion:1,revision:0,layouts:snap,actions:[{id:'a1',enabled:true,definition:{kind:'hostUrl',url:'https://example.com'}}],assets:[]}});
+ const prep=await req2('/api/actions/prepare',{method:'POST',remote:true,cookie:paired2,body:{actionId:'a1',revision:1,pageId:'agents',slotIndex:0}});
+ const inv=await req2('/api/actions/invoke',{method:'POST',remote:true,cookie:paired2,body:prep.json});
+ assert.equal(inv.status,202);
+ assert.equal((await req2('/api/actions/status/r-gone',{remote:true,cookie:paired2})).status,404);
+ assert.equal((await req2('/api/actions/cancel/r-gone',{method:'POST',remote:true,cookie:paired2,body:{}})).status,404);
 });

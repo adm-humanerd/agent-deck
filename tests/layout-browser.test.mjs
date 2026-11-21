@@ -40,7 +40,7 @@ test('whole-key authoring, frozen CAS and independent paired runtimes', {timeout
  for(const page of [pc,pcB,remote,remoteB]){page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(r.method()==='PUT'&&r.url().endsWith('/api/custom-layout'))puts.push(JSON.parse(r.postData()));});}
  const wait=(page,fn)=>page.waitForFunction(fn,null,{timeout:15000});
  const pageUI=async id=>pc.locator('#editorPages button[data-page="'+id+'"]').click();
- const assign=async(index,action)=>{if(!await pc.evaluate(()=>deckEditing))await pc.locator('#editDeck').click();await pc.locator('#keys button').nth(index).click();await pc.locator('#keyAssignment').selectOption(JSON.stringify(action));await pc.locator('#saveAssignment').click();};
+ const assign=async(index,action)=>{if(!await pc.evaluate(()=>deckEditing))await pc.locator('#editDeck').click();await pc.locator('#keys button').nth(index).click();await pc.locator('#keyAssignment').selectOption(JSON.stringify(action));await pc.locator('#saveAssignment').click();await pc.waitForFunction(()=>editingSlot===null&&!layoutSaving);};
  const key=(page,index)=>page.locator('#keys button[data-key-id]').nth(index);
  const pair=async page=>{await page.goto(remoteURL);await page.locator('#code').fill('123456');await page.locator('#pairButton').click();await wait(page,()=>layoutRevision!==null&&!deckLocal);};
  try{
@@ -60,13 +60,15 @@ test('whole-key authoring, frozen CAS and independent paired runtimes', {timeout
   assert.equal(await remote.evaluate(()=>deckEditing||!!document.querySelector('dialog[open]')),false);
   const denied=await remote.evaluate(async()=>{const r=await fetch('/api/layout',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:layoutRevision,layouts:deckLayouts})});return r.status;});assert.equal(denied,403);
   assert.deepEqual((await store.get()).layouts,legacy);record('remote-authority','Unauthenticated GET401; paired remote forced editor inert and PUT403');
+  if(!await pc.locator('#navCheckDetails').evaluate(e=>e.open))await pc.locator('#navCheckDetails summary').click();
   await pc.locator('#connectionPlan').selectOption([JSON.stringify({type:'sessions'}),JSON.stringify({type:'page',page:'quota'})]);assert.match(await pc.locator('#graphStatus').textContent(),/연결 2개 · 빈 키 0개 · 추가 빈 키 2개/);await pc.locator('#connectionPlan').selectOption([]);
 
   // A blocks occupied navigation insertion without altering even the local candidate.
-  await pc.locator('#editDeck').click();await key(pc,0).click();
+  if(!await pc.evaluate(()=>deckEditing))await pc.locator('#editDeck').click();
+  await key(pc,0).click();
   const fullBefore=await pc.evaluate(()=>JSON.stringify(editorLayouts()));
   await pc.locator('#keyAssignment').selectOption(JSON.stringify({type:'sessions'}));
-  assert.match(await pc.locator('#layoutStatus').textContent(),/必要|필요한 빈 키 추가 1개/);
+  assert.match(await pc.locator('#layoutStatus').textContent(),/필요한 빈 키 추가 1개/);
   await pc.locator('#saveAssignment').click();assert.match(await pc.locator('#layoutStatus').textContent(),/사용 중/);
   assert.equal(await pc.evaluate(()=>JSON.stringify(editorLayouts())),fullBefore);assert.deepEqual((await store.get()).layouts,legacy);
   await pc.screenshot({path:path.join(artifacts,'editor-blocked.png'),fullPage:true});await pc.locator('#cancelAssignment').click();
@@ -75,7 +77,7 @@ test('whole-key authoring, frozen CAS and independent paired runtimes', {timeout
   // Explicit ordinary preparation remains possible on an existing disconnected graph.
   for(const index of [12,13,14]){await assign(index,{type:'empty'});}
   await wait(pc,()=>layoutRevision===4);
-  await pc.locator('#addDeckPage').click();await pc.locator('#pageName').fill('직접 준비한 페이지');await pc.getByRole('button',{name:'추가',exact:true}).click();
+  await pc.locator('#addDeckPage').click();await pc.locator('#autoLinkPage').uncheck();await pc.locator('#pageName').fill('직접 준비한 페이지');await pc.getByRole('button',{name:'추가',exact:true}).click();
   const newID=await pc.evaluate(()=>deckProfile);
   assert.equal(await pc.evaluate(()=>currentDeckLayout().slots.filter(s=>s.type==='empty').length),15);
   assert.equal((await store.get()).layouts.length,4);
@@ -113,7 +115,7 @@ test('whole-key authoring, frozen CAS and independent paired runtimes', {timeout
    }
   }
   await pc.setViewportSize({width:1440,height:1000});await pc.keyboard.press('Escape');assert.equal(await pc.locator('#keyEditor').isVisible(),false);await pc.keyboard.press('Enter');assert.equal(await pc.locator('#keyAssignment').evaluate(e=>e===document.activeElement),true);
-  for(const id of ['customLabel','customSymbol','customColor','customImage','removeCustomImage','customKind','cancelAssignment']){await pc.keyboard.press('Tab');assert.equal(await pc.locator('#'+id).evaluate(e=>e===document.activeElement),true,id+' keyboard traversal');}
+  for(const id of ['customLabel','customSymbol','customColor','customImage','removeCustomImage','cancelAssignment']){await pc.keyboard.press('Tab');assert.equal(await pc.locator('#'+id).evaluate(e=>e===document.activeElement),true,id+' keyboard traversal');}
   await pc.locator('#cancelAssignment').click();await pc.locator('#editDeck').click();
   await key(pc,0).click();await wait(pc,()=>deckProfile==='response');await pc.evaluate(()=>ask(active(),'1','1'));assert.equal(calls.length,beforePreview);
   await pageUI('agents');await key(pc,12).click();await key(pc,14).click();assert.equal(calls.length,beforePreview);assert.equal(await remote.evaluate(()=>deckCursor().kind),'authored');

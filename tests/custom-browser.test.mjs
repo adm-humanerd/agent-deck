@@ -54,8 +54,10 @@ test('custom inspector, paired one-shot press, frozen CAS and no offline replay'
   await pc.goto(localURL);await wait(pc,()=>layoutRevision===0&&deckLocal);
   await pc.locator('#importLayout').click();await wait(pc,()=>layoutRevision===1);
   assert.equal(starts,0);assert.equal(builtinCalls,0);record('local-import','Browser legacy fixture imported with zero dispatch');
-  await pc.locator('#editDeck').click();await key(pc).click();
+  if(!await pc.evaluate(()=>deckEditing))await pc.locator('#editDeck').click();
+  await key(pc).click();
   await pc.locator('#customLabel').fill('Fixture launch');await pc.locator('#customSymbol').selectOption('terminal');await pc.locator('#customColor').fill('#315a82');
+  await pc.locator('#modeTabAutomation').click();
   await pc.locator('#customKind').selectOption('hostProcess');await pc.locator('#customShell').selectOption('bash');
   await pc.locator('#customScript').fill('exec ./sentinel');await pc.locator('#customCwd').fill(dir);await pc.locator('#customTimeout').fill('3000');await pc.locator('#customMaxOutput').fill('8192');
   await pc.locator('#customTrusted').check();
@@ -68,9 +70,9 @@ test('custom inspector, paired one-shot press, frozen CAS and no offline replay'
   assert.equal(starts,0);assert.equal(builtinCalls,0);
   let stored=await layouts.snapshot();const actionId=stored.actions[0].id;
   assert.equal(stored.layouts[0].slots[0].presentation.label,'Fixture launch');assert.equal(stored.assets.length,1);
-  await pc.reload();await wait(pc,()=>layoutRevision===2&&deckLocal);await key(pc).click();assert.equal(starts,0);
+  await pc.reload();await wait(pc,()=>layoutRevision===2&&deckLocal);if(await pc.evaluate(()=>deckEditing))await pc.locator('#editDeck').click();await key(pc).click();assert.equal(starts,0);
   await pc.setViewportSize({width:1920,height:1080});await screenshotPC('pc-1920-preview.png');
-  await pc.locator('#editDeck').click();await key(pc).click();assert.equal(await pc.locator('#customLabel').inputValue(),'Fixture launch');assert.equal(await pc.locator('#customKind').inputValue(),'hostProcess');
+  if(!await pc.evaluate(()=>deckEditing))await pc.locator('#editDeck').click();await key(pc).click();assert.equal(await pc.locator('#customLabel').inputValue(),'Fixture launch');assert.equal(await pc.locator('#customKind').inputValue(),'hostProcess');
   await screenshotPC('pc-1920-editor.png');
   const originalPolicy=structuredClone(stored.actions[0].definition.executionPolicy);
   assert.deepEqual(originalPolicy,{timeoutMs:3000,maxOutputBytes:8192});
@@ -145,6 +147,8 @@ test('custom inspector, paired one-shot press, frozen CAS and no offline replay'
   await key(mobile).tap();const receipt=await (await invoked).json();await wait(mobile,()=>!sending);
   for(let i=0;i<200&&dispatcher.localStatus(receipt.runId)?.state==='running';i++)await new Promise(resolve=>setTimeout(resolve,10));
   assert.equal(dispatcher.localStatus(receipt.runId)?.state,'exit');assert.equal(dispatcher.localStatus(receipt.runId)?.stdout,'CUSTOM_BROWSER_SENTINEL');assert.equal(starts,1);
+  await mobile.evaluate(()=>pollCustomRuns());
+  await wait(mobile,()=>!document.querySelector('#keys button[data-key-id]')?.disabled);
   for(const [run,done,text]of [
    [{state:'exit',exitCode:0,signal:null},true,'exit 0'],
    [{state:'exit',exitCode:7,signal:null},false,'실패 · exit 7'],
@@ -164,7 +168,7 @@ test('custom inspector, paired one-shot press, frozen CAS and no offline replay'
   const invokeResponse=await mobile.evaluate(async()=>{const s=await (await fetch('/api/custom-layout')).json();const p=await (await fetch('/api/actions/prepare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actionId:s.actions[0].id,revision:s.revision,pageId:'agents',slotIndex:0})})).json();return p;});
   // An unused prepared context becomes stale after a genuine second-tab commit.
   await other.goto(localURL);await wait(other,()=>deckLocal&&layoutRevision===3);
-  await pc.locator('#reloadLayout').click();await wait(pc,()=>!deckCandidate);await pc.locator('#editDeck').click();await key(pc).click();await pc.locator('#customLabel').fill('Frozen draft');
+  await pc.locator('#reloadLayout').click();await wait(pc,()=>!deckCandidate);if(!await pc.evaluate(()=>deckEditing))await pc.locator('#editDeck').click();await key(pc).click();await pc.locator('#customLabel').fill('Frozen draft');
   const base=await pc.evaluate(()=>deckCandidate.baseRevision);
   const commit=await other.evaluate(async()=>{const s=await (await fetch('/api/custom-layout')).json();s.layouts[0].name='Concurrent fixture';const {initialized,...body}=s;return (await fetch('/api/custom-layout',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).status;});assert.equal(commit,200);
   await pc.evaluate(()=>loadSharedLayouts());assert.equal(await pc.evaluate(()=>layoutRevision),base+1);await pc.locator('#saveAssignment').click();await wait(pc,()=>!layoutSaving&&!!deckCandidate?.error);
@@ -184,6 +188,67 @@ test('custom inspector, paired one-shot press, frozen CAS and no offline replay'
   transcript.finishedAt=new Date().toISOString();
   await writeFile(path.join(artifacts,'browser-transcript.json'),JSON.stringify(transcript,null,2));
   for(const child of children){try{process.kill(-child.pid,'SIGKILL');}catch{}child.kill('SIGKILL');}
+  const closed=server?new Promise(resolve=>server.close(resolve)):Promise.resolve();server?.closeAllConnections();
+  try{if(browser)await browser.close();}finally{await closed;await rm(dir,{recursive:true,force:true});}
+ }
+});
+
+test('inline key editor keeps modal=false, unmodified cancel clears candidate, staged icon previews ?staged=1, and #removeCustomAction prunes on save',{timeout:120000,skip:process.platform==='win32'},async()=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'deck-editor-browser-'));
+ let browser,server;
+ try{
+  const layouts=createLayoutStore(path.join(dir,'layout.json')),assets=createAssetStore(path.join(dir,'assets'));
+  const sessions=await createSessions(pathToFileURL(path.join(dir,'sessions.json')));
+  const dispatcher=createHostDispatcher();
+  const runner={refresh:async()=>({ok:true,agents:[],sessions:[]})};
+  let handler;
+  server=http.createServer((req,res)=>handler(req,res));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const port=server.address().port,localURL=`http://127.0.0.1:${port}`;
+  handler=createRequestHandler({sessions,layouts,assets,dispatcher,bridge:runner,nativeHerdr:runner,network:{refresh:async()=>({ok:true,sessions:[]})},quotas:{refresh:async()=>({providers:[]})},pin:'123456',listenPort:port,addresses:()=>[]});
+  let executablePath=process.env.DECK_BROWSER_PATH;
+  if(!executablePath){try{await access('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome');executablePath='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';}catch{}}
+  browser=await chromium.launch({headless:true,executablePath});
+  const pc=await browser.newPage({viewport:{width:1280,height:800}});
+  const wait=(fn)=>pc.waitForFunction(fn,null,{timeout:15000});
+  await pc.goto(localURL);await wait(()=>layoutRevision===0&&deckLocal);
+  await pc.locator('#initializeLayout').click();await wait(()=>layoutRevision===1);
+  if(!await pc.evaluate(()=>deckEditing))await pc.locator('#editDeck').click();
+  await pc.locator('#keys button[data-key-id]').nth(0).click();
+  await wait(()=>editingSlot===0);
+  assert.equal(await pc.evaluate(()=>modal),false);
+  await pc.locator('#cancelAssignment').click();
+  await wait(()=>editingSlot===null);
+  assert.equal(await pc.evaluate(()=>deckCandidate),null);
+
+  await pc.locator('#keys button[data-key-id]').nth(0).click();
+  await pc.locator('#customLabel').fill('Browser Icon');
+  await pc.locator('#modeTabAutomation').click();
+  await pc.locator('#customKind').selectOption('hostUrl');
+  const png=await sharp({create:{width:16,height:16,channels:4,background:'#315a82'}}).png().toBuffer();
+  await pc.locator('#customImage').setInputFiles({name:'icon.png',mimeType:'image/png',buffer:png});
+  await wait(()=>document.querySelector('#keyPreviewTile img')?.src.includes('?staged=1')&&document.querySelector('#keyPreviewTile img')?.complete&&document.querySelector('#keyPreviewTile img')?.naturalWidth>0);
+  await pc.locator('#customUrl').fill('https://example.com');
+  await pc.locator('#saveAssignment').click();
+  await wait(()=>layoutRevision>=2&&!layoutSaving);
+  assert.equal((await layouts.snapshot()).actions.length,1);
+  assert.equal((await layouts.snapshot()).assets.length,1);
+
+  await pc.locator('#keys button[data-key-id]').nth(0).click();
+  await pc.locator('#removeCustomAction').click();
+  assert.equal(await pc.evaluate(()=>deckCandidate.actions.length),1);
+  await pc.locator('#cancelAssignment').click();
+  await wait(()=>editingSlot===null);
+  assert.equal((await layouts.snapshot()).actions.length,1);
+
+  await pc.locator('#keys button[data-key-id]').nth(0).click();
+  await pc.locator('#removeCustomAction').click();
+  await pc.locator('#saveAssignment').click();
+  await wait(()=>layoutRevision===3&&!layoutSaving);
+  const finalSnap=await layouts.snapshot();
+  assert.equal(finalSnap.actions.length,0);
+  assert.equal(finalSnap.assets.length,0);
+  assert.equal(finalSnap.layouts[0].slots[0].type,'empty');
+ }finally{
   const closed=server?new Promise(resolve=>server.close(resolve)):Promise.resolve();server?.closeAllConnections();
   try{if(browser)await browser.close();}finally{await closed;await rm(dir,{recursive:true,force:true});}
  }

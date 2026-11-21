@@ -15,7 +15,7 @@ var quotaView=(()=>{
   return ['codex','agy'].map(provider=>{
    const matches=data.providers.filter(p=>p?.provider===provider),p=matches[0];
    if(matches.length!==1||!date(p.checkedAt)||typeof p.stale!=='boolean'||!(p.error===null||typeof p.error==='string')||!Array.isArray(p.buckets)||!Array.isArray(p.models))throw Error();
-   if(!p.buckets.every(b=>item(b)&&window(b.fiveHour)&&window(b.weekly))||!p.models.every(m=>item(m)&&window(m)))throw Error();
+   if(!p.buckets.every(b=>item(b)&&window(b.fiveHour)&&window(b.weekly)&&(!b.daily||window(b.daily))&&(!b.monthly||window(b.monthly)))||!p.models.every(m=>item(m)&&window(m)))throw Error();
    if(new Set(p.buckets.map(b=>b.id)).size!==p.buckets.length)throw Error();
    return {...p,error:p.error?'조회 실패 · 연결 또는 로그인 상태를 확인하세요':null};
   });
@@ -27,19 +27,32 @@ var quotaView=(()=>{
   if(p.error)return (old?'오래된 정보 (stale) · ':'')+p.error;
   return !p.checkedAt?'아직 확인되지 않음':old?'오래된 정보 (stale)':'조회 정상';
  }
- function gauge(label,window){
+ function gauge(label,window,compact=false){
   const value=pct(window?.remaining),row=node('div',undefined,'quota-row');
-  row.append(node('span',label+' 잔여 '+(value===null?'—':value+'%')));
+  const head=node('div',undefined,'quota-row-head');
+  if(compact){
+   head.append(node('span',label),node('span',value===null?'—':value+'%','quota-val'));
+  }else{
+   head.append(node('span',label+' 잔여 '+(value===null?'—':value+'%')));
+  }
+  row.append(head);
   const track=node('div',undefined,'quota-track'+(value===null?' unknown':''));
   track.setAttribute('role','meter');track.setAttribute('aria-label',label+' 잔여율');
   track.setAttribute('aria-valuemin','0');track.setAttribute('aria-valuemax','100');
-  if(value!==null){track.setAttribute('aria-valuenow',String(value));const fill=node('i');fill.style.width=value+'%';fill.style.background=value<=5?'#f87171':value<=20?'#f6bf63':'#69d9a0';track.append(fill);}
+  if(value!==null){track.setAttribute('aria-valuenow',String(value));const fill=node('i');fill.style.width=value+'%';fill.style.background=value<=5?'#ffc2b8':value<=20?'#f6bf63':'#b9e8ce';track.append(fill);}
   else track.setAttribute('aria-valuetext','알 수 없음');
   row.append(track);return row;
  }
  function stale(p){return p.stale||!p.checkedAt||Date.now()-Date.parse(p.checkedAt)>180000||Date.now()-lastReceived>180000;}
+ function isAbnormalStatus(p){return phase!=='ready'||!!p.error||!p.checkedAt||stale(p);}
  function cleanModelName(label){
   return (label||'').replace(/\s*\((Low|Medium|High|XHigh)\)/gi,'').trim();
+ }
+ function shortGroupLabel(label){
+  const s=String(label||'').trim();
+  if(/^gemini/i.test(s))return 'Gemini';
+  if(/claude.*gpt/i.test(s))return 'Claude·GPT';
+  return s;
  }
  function name(p){
   const base=p.provider==='codex'?'Codex':'Antigravity';
@@ -69,6 +82,30 @@ var quotaView=(()=>{
   }
   return Array.from(map.values());
  }
+ function bucketWindows(b){
+  if(!b)return [['5시간',null],['주간',null]];
+  const rows=[];
+  const hasStandard=pct(b.fiveHour?.remaining)!==null||pct(b.weekly?.remaining)!==null;
+  const hasExtended=pct(b.daily?.remaining)!==null||pct(b.monthly?.remaining)!==null;
+  if(hasStandard||!hasExtended)rows.push(['5시간',b.fiveHour],['주간',b.weekly]);
+  if(pct(b.daily?.remaining)!==null)rows.push(['일간',b.daily]);
+  if(pct(b.monthly?.remaining)!==null)rows.push(['월간',b.monthly]);
+  return rows;
+ }
+ function confirmedAgyBuckets(p){
+  if(p.provider!=='agy')return [];
+  return (p.buckets||[]).filter(b=>[b.fiveHour,b.weekly,b.daily,b.monthly].some(w=>pct(w?.remaining)!==null));
+ }
+ function activeAgyBucket(p){
+  const confirmed=confirmedAgyBuckets(p);
+  if(!confirmed.length)return null;
+  const saved=storage.get('agentDeck.quota.agyBucket');
+  return confirmed.find(b=>b.id===saved||b.label===saved)||confirmed[0];
+ }
+ function selectAgyBucket(bucket){
+  storage.set('agentDeck.quota.agyBucket',bucket.id);
+  render();
+ }
  function activeAgyModel(p){
   if(p.provider!=='agy'||!p.models?.length)return null;
   const grouped=groupModels(p.models);
@@ -84,47 +121,111 @@ var quotaView=(()=>{
   const content=document.getElementById('quotaContent'),scroll=dialog.open?content.scrollTop:0;content.replaceChildren();
   document.getElementById('quotaTitle').textContent=name(p)+' 쿼터';
   const planInfo=p.plan?'구독 플랜: '+p.plan+' · ':'';
-  content.append(node('p',planInfo+'활성계정 범위 · 다중계정 식별/전체 계정 조회 미지원','hint'));
-  content.append(node('p','마지막 확인: '+(p.checkedAt?new Date(p.checkedAt).toLocaleString():'—')));
-  content.append(node('p',status(p)));
-  if(!p.buckets.length){content.append(gauge('5시간',null),gauge('주간',null),node('p','잔여율과 초기화 시각 미확인 · 다시 확인으로 재조회하세요','hint'));}
-  for(const b of p.buckets||[]){
-   content.append(node('h3',b.label));
-   for(const [label,w] of [['5시간',b.fiveHour],['주간',b.weekly]]){content.append(gauge(label,w),node('p',resetText(w?.resetsAt),'hint'));}
-  }
-  if(p.provider==='agy'){
-   const chosen=activeAgyModel(p);
-   const grouped=groupModels(p.models);
-   content.append(node('p','덱 키에 표시할 대표 모델을 선택하세요. 모델별 값은 실제 잔여율입니다.','hint'));
-   for(const m of grouped){
+  const metaBar=node('div',undefined,'quota-meta-bar');
+  const pill=node('span',status(p),'quota-status-pill');
+  pill.dataset.state=p.error?'err':stale(p)||phase!=='ready'?'warn':'ok';
+  metaBar.append(pill,node('p','마지막 확인: '+(p.checkedAt?new Date(p.checkedAt).toLocaleString():'—'),'quota-checked-at'));
+  content.append(metaBar,node('p',planInfo+'활성계정 범위 · 다중계정 식별/전체 계정 조회 미지원','hint'));
+  const confirmedAgy=confirmedAgyBuckets(p);
+  if(p.provider==='agy'&&confirmedAgy.length){
+   const chosen=activeAgyBucket(p);
+   content.append(node('p','덱 키에 표시할 모델 그룹을 선택하세요. 5시간·주간 잔여율은 실제 계정 기준입니다.','hint'));
+   for(const b of confirmedAgy){
+    const card=node('div',undefined,'quota-group-card');
     const header=node('div',undefined,'model-pick-header');
-    header.append(node('h3',m.cleanName));
-    const isSelected=chosen?.cleanName===m.cleanName;
+    header.append(node('h3',b.label));
+    const isSelected=chosen?.id===b.id;
     const btn=node('button',isSelected?'✓ 키에 표시 중':'키에 표시',isSelected?'model-pick-btn active':'model-pick-btn');
     btn.type='button';
-    btn.onclick=()=>selectAgyModel(m);
+    btn.onclick=()=>selectAgyBucket(b);
     header.append(btn);
-    content.append(header,gauge('모델',m),node('p',resetText(m.resetsAt),'hint'));
+    card.append(header);
+    for(const [label,w] of bucketWindows(b)){card.append(gauge(label,w,false),node('p',resetText(w?.resetsAt),'hint'));}
+    const names=[];
+    for(const m of groupModels(p.models)){if(m.groupId===b.id&&!names.includes(m.cleanName))names.push(m.cleanName);}
+    if(names.length)card.append(node('p','포함 모델: '+names.join(', '),'quota-models-note'));
+    content.append(card);
+   }
+  }else{
+   if(!p.buckets.length){content.append(gauge('5시간',null,false),gauge('주간',null,false),node('p','잔여율과 초기화 시각 미확인 · 다시 확인으로 재조회하세요','hint'));}
+   for(const b of p.buckets||[]){
+    const card=node('div',undefined,'quota-group-card');
+    card.append(node('h3',b.label));
+    for(const [label,w] of bucketWindows(b)){card.append(gauge(label,w,false),node('p',resetText(w?.resetsAt),'hint'));}
+    content.append(card);
+   }
+   if(p.provider==='agy'){
+    const chosen=activeAgyModel(p);
+    const grouped=groupModels(p.models);
+    content.append(node('p','덱 키에 표시할 대표 모델을 선택하세요. 모델별 값은 실제 잔여율입니다.','hint'));
+    for(const m of grouped){
+     const card=node('div',undefined,'quota-group-card');
+     const header=node('div',undefined,'model-pick-header');
+     header.append(node('h3',m.cleanName));
+     const isSelected=chosen?.cleanName===m.cleanName;
+     const btn=node('button',isSelected?'✓ 키에 표시 중':'키에 표시',isSelected?'model-pick-btn active':'model-pick-btn');
+     btn.type='button';
+     btn.onclick=()=>selectAgyModel(m);
+     header.append(btn);
+     card.append(header,gauge('모델',m,false),node('p',resetText(m.resetsAt),'hint'));
+     content.append(card);
+    }
    }
   }
   content.scrollTop=scroll;
  }
  function update(entry){
   const p=providers.find(x=>x.provider===entry.provider),b=p.buckets[0];
+  const agyBucket=activeAgyBucket(p);
+  const chosenBucketId=storage.get('agentDeck.quota.agyBucket');
   const agyModel=activeAgyModel(p);
-  const signature=JSON.stringify([p,status(p),agyModel?.id]);
+  const chosenId=storage.get('agentDeck.quota.agyModel');
+  const abnormal=isAbnormalStatus(p);
+  const signature=JSON.stringify([p,status(p),abnormal,agyBucket?.id,chosenBucketId,agyModel?.id,chosenId]);
   if(entry.signature===signature)return;
-  if(p.provider==='agy'){
-   const chosenId=storage.get('agentDeck.quota.agyModel');
+  const baseName=p.provider==='codex'?'Codex':'Antigravity';
+  if(p.provider==='agy'&&agyBucket){
+   const confirmed=confirmedAgyBuckets(p);
+   const idx=confirmed.findIndex(x=>x.id===agyBucket.id);
+   const windows=bucketWindows(agyBucket).slice(0,2);
+   const tag=shortGroupLabel(agyBucket.label);
+   const head=node('div',undefined,'quota-key-head');
+   head.append(node('strong',baseName),node('span',tag,'quota-tag'));
+   const metrics=node('div',undefined,'quota-metrics');
+   metrics.append(...windows.map(([lbl,w])=>gauge(lbl,w,true)));
+   const parts=[head,metrics];
+   if(abnormal)parts.push(node('small',status(p),'quota-foot'+(p.error||stale(p)?' is-alert':'')));
+   entry.button.replaceChildren(...parts);
+   const summary=agyBucket.label+(confirmed.length>1?' ('+(idx+1)+'/'+confirmed.length+')':'');
+   entry.button.setAttribute('aria-label',name(p)+' 쿼터 · '+summary+' · '+windows.map(([lbl,w])=>lbl+' 잔여 '+(pct(w?.remaining)===null?'—':pct(w?.remaining)+'%')).join(' · ')+' · '+status(p)+' · 터치 상세');
+  }else if(p.provider==='agy'){
    const m=agyModel;
    const cleanName=m?cleanModelName(m.label):'대표 모델';
    const summary=chosenId?cleanName:'모델 미선택 · 터치해 선택';
-   const secondGauge=p.models?.length>1&&chosenId?gauge('주간 (추정)',p.models.find(x=>x.id!==m?.id&&x.label.includes('Argon'))||p.models[1]):gauge('기간',b?.weekly);
-   entry.button.replaceChildren(node('strong',name(p)),gauge(cleanName,m),secondGauge,node('small',summary),node('small',status(p)));
+   const grouped=groupModels(p.models);
+   const other=chosenId?grouped.find(x=>x.cleanName!==cleanName):null;
+   const secondGauge=other?gauge(other.cleanName,other,true):gauge('기간',b?.weekly,true);
+   const head=node('div',undefined,'quota-key-head');
+   head.append(node('strong',baseName));
+   if(p.plan)head.append(node('span',p.plan,'quota-tag'));
+   const metrics=node('div',undefined,'quota-metrics');
+   metrics.append(gauge(cleanName,m,true),secondGauge);
+   const parts=[head,metrics,node('small',summary,'quota-foot')];
+   if(abnormal)parts.push(node('small',status(p),'quota-foot'+(p.error||stale(p)?' is-alert':'')));
+   entry.button.replaceChildren(...parts);
    entry.button.setAttribute('aria-label',name(p)+' 쿼터 · '+(m?cleanName+' 잔여 '+(m.remaining===null?'—':m.remaining+'%'):'모델 미선택')+' · '+summary+' · '+status(p)+' · 터치 상세');
   }else{
+   const windows=bucketWindows(b).slice(0,2);
    const summary=(p.buckets.length>1?'공유 한도 1/'+p.buckets.length:'활성계정');
-   entry.button.replaceChildren(node('strong',name(p)),gauge('5시간',b?.fiveHour),gauge('주간',b?.weekly),node('small',summary+' · 터치 상세'),node('small',status(p)));
+   const head=node('div',undefined,'quota-key-head');
+   head.append(node('strong',baseName));
+   if(p.plan)head.append(node('span',p.plan,'quota-tag'));
+   const metrics=node('div',undefined,'quota-metrics');
+   metrics.append(...windows.map(([lbl,w])=>gauge(lbl,w,true)));
+   const parts=[head,metrics];
+   if(p.buckets.length>1)parts.push(node('small',summary,'quota-foot'));
+   if(abnormal)parts.push(node('small',status(p),'quota-foot'+(p.error||stale(p)?' is-alert':'')));
+   entry.button.replaceChildren(...parts);
    entry.button.setAttribute('aria-label',name(p)+' 쿼터 · '+summary+' · '+status(p)+' · 터치 상세');
   }
   entry.signature=signature;
@@ -142,17 +243,17 @@ var quotaView=(()=>{
   for(const entry of buttons.values())update(entry);
   if(dialog.open)detail();
  }
- async function refresh(){
+ async function refresh(force=false){
   if(preview||busy||document.hidden)return;busy=true;
-  try{const response=await fetch('/api/quotas');if(!response.ok)throw Error();providers=validate(await response.json());lastReceived=Date.now();phase='ready';}
+  try{const response=await fetch(force===true?'/api/quotas?force=1':'/api/quotas');if(!response.ok)throw Error();providers=validate(await response.json());lastReceived=Date.now();phase='ready';}
   catch{phase='error';providers=providers.map(p=>({...p,error:'서버 조회 오류 · 다시 확인하세요',stale:true}));}
   finally{busy=false;render();}
  }
  document.getElementById('closeQuota').onclick=()=>dialog.close();
- dialog.addEventListener('close',()=>{modal=false;buttons.get(opener)?.button.focus({preventScroll:true});});
- document.getElementById('refreshQuota').onclick=refresh;
- document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
- render();refresh();setInterval(refresh,30000);setInterval(render,10000);
+ dialog.addEventListener('close',()=>{modal=Boolean(document.querySelector?.('dialog:modal'));buttons.get(opener)?.button.focus({preventScroll:true});});
+ document.getElementById('refreshQuota').onclick=()=>refresh(true);
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh(false);});
+ render();refresh(false);setInterval(()=>refresh(false),30000);setInterval(render,10000);
  return {key,refresh};
 })();
 if(typeof redrawDeck==='function')redrawDeck();

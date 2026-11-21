@@ -81,4 +81,4 @@ function renderNativeInspector(a,ok){
  for(const d of side.querySelectorAll('.request-disclosure'))if(expanded.some(([key,cls])=>key===d.dataset.requestKey&&cls===d.className))d.open=true;
 }
 $('nativeView').onclick=()=>setDeckView('native');
-setInterval(()=>{if(deckView==='native')refreshNative();},5000);
+setInterval(()=>{if(!document.hidden&&deckView==='native')refreshNative();},5000);

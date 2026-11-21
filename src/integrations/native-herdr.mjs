@@ -106,23 +106,30 @@ export function createNativeHerdr(runApp,raiseApp=async()=>{},runHc=async()=>{re
  async function inspect(){
   const raw=JSON.parse(await runApp(['ls']));
   const termMeta=await readTerminalMetadata();
-  const blockedData={};
+  const blockedTargets=[];
+  const seenBlocked=new Set();
+  function collectBlocked(t){
+   if(!t||typeof t.terminal!=='string'||!t.terminal||seenBlocked.has(t.terminal))return;
+   seenBlocked.add(t.terminal);
+   if(t.status==='blocked')blockedTargets.push(t.terminal);
+   if(Array.isArray(t.sub_agents))for(const child of t.sub_agents)collectBlocked(child);
+  }
   for(const space of raw.spaces||[]){
    for(const tab of space.tabs||[]){
-    for(const t of tab.terminals||[]){
-     if(t&&t.terminal&&t.status==='blocked'){
-      try{
-       const text=await readTerminal(t.terminal);
-       const ch=choices(text);
-       const ticket=fingerprint({pane_id:'native:'+t.terminal,agent_session:t.terminal,agent_status:'blocked',revision:0,state_change_seq:0},text);
-       blockedData[t.terminal]={text,choices:ch,ticket};
-      }catch(e){
-       blockedData[t.terminal]={text:'',choices:[],ticket:null,error:e.message};
-      }
-     }
-    }
+    for(const t of tab.terminals||[])collectBlocked(t);
    }
   }
+  const blockedData={};
+  await Promise.all(blockedTargets.map(async terminal=>{
+   try{
+    const text=await readTerminal(terminal);
+    const ch=choices(text);
+    const ticket=fingerprint({pane_id:'native:'+terminal,agent_session:terminal,agent_status:'blocked',revision:0,state_change_seq:0},text);
+    blockedData[terminal]={text,choices:ch,ticket};
+   }catch(e){
+    blockedData[terminal]={text:'',choices:[],ticket:null,error:e.message};
+   }
+  }));
   return normalizeNativeHerdr(raw,blockedData,termMeta);
  }
  async function refresh(){
