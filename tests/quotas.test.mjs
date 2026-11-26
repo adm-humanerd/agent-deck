@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {readFile} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {chmod,mkdtemp,readdir,readFile,rm,writeFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import {normalizeCodex,normalizeAgy,createQuotaReader,readCodex,readAgy} from '../src/integrations/quotas.mjs';
 import {applyQuotaView} from '../scripts/build/apply-quota-view.mjs';
@@ -292,18 +294,120 @@ test('AGY confirmed 5h + weekly groups normalize safely and switch cleanly on ke
  const {ids}=clientHarness(async()=>({ok:true,json:async()=>data}),extra);await settle();
  const agyKey=ids.quotaKeys.children[1];
  assert.match(text(agyKey),/Antigravity/);
- assert.match(text(agyKey),/Gemini/);
- assert.match(text(agyKey),/5시간 62\.5%/);
- assert.match(text(agyKey),/주간 76\.9%/);
+ assert.equal(flatten(agyKey).filter(n=>n.attrs?.class==='quota-tag').length,0);
+ assert.equal(flatten(agyKey).filter(n=>n.attrs?.role==='meter').length,4);
+ assert.match(text(agyKey),/Gemini 5h 62\.5%/);
+ assert.match(text(agyKey),/Gemini 주간 76\.9%/);
+ assert.match(text(agyKey),/3P 5h 100%/);
+ assert.match(text(agyKey),/3P 주간 100%/);
  assert.doesNotMatch(text(agyKey),/조회 정상|터치 상세/);
+ const pairsBefore=flatten(agyKey).filter(n=>n.attrs?.class?.includes('quota-bucket-pair'));
+ assert.equal(pairsBefore.length,2);
+ assert.equal(pairsBefore[0].attrs.class,'quota-bucket-pair');
+ assert.equal(pairsBefore[1].attrs.class,'quota-bucket-pair is-secondary');
  agyKey.onclick();
  assert.match(text(ids.quotaContent),/포함 모델: Gemini 4 Neon/);
  const pickButtons=flatten(ids.quotaContent).filter(n=>n.attrs?.class?.includes('model-pick-btn'));
  assert.equal(pickButtons.length,2);
  pickButtons[1].onclick();
- assert.match(text(agyKey),/Claude·GPT/);
- assert.match(text(agyKey),/5시간 100%/);
+ assert.equal(flatten(agyKey).filter(n=>n.attrs?.class==='quota-tag').length,0);
+ const pairsAfter=flatten(agyKey).filter(n=>n.attrs?.class?.includes('quota-bucket-pair'));
+ assert.equal(pairsAfter.length,2);
+ assert.equal(pairsAfter[0].attrs.class,'quota-bucket-pair is-secondary');
+ assert.equal(pairsAfter[1].attrs.class,'quota-bucket-pair');
+ assert.match(text(agyKey),/Gemini 5h 62\.5%/);
+ assert.match(text(agyKey),/3P 5h 100%/);
  assert.equal(store.get('agentDeck.quota.agyBucket'),normalized.buckets[1].id);
+});
+test('AGY displays account tier badge in key head and full plan in detail dialog across bucket switches',async()=>{
+ const raw={
+  planType:'Google AI Ultra',
+  usageGroups:[
+   {id:'group-0-Gemini Models',name:'Gemini Models',fiveHour:{remainingFraction:0.9,resetTime:'2026-11-26T12:42:22Z'},weekly:{remainingFraction:0.98,resetTime:'2026-12-03T07:42:22Z'}},
+   {id:'group-1-Claude and GPT models',name:'Claude and GPT models',fiveHour:{remainingFraction:1,resetTime:'2026-11-26T12:42:22Z'},weekly:{remainingFraction:0.21,resetTime:'2026-12-01T03:25:18Z'}}
+  ],
+  userStatus:{cascadeModelConfigData:{clientModelConfigs:[
+   {label:'Gemini 4 Neon',modelId:'Gemini 4 Neon',groupId:'group-0-Gemini Models',period:'5h',quotaInfo:{remainingFraction:0.9,resetTime:'2026-11-26T12:42:22Z'}},
+   {label:'Claude Opus 5.5',modelId:'Claude Opus 5.5',groupId:'group-1-Claude and GPT models',period:'5h',quotaInfo:{remainingFraction:1,resetTime:'2026-11-26T12:42:22Z'}}
+  ]}}
+ };
+ const normalized=normalizeAgy(raw);
+ assert.equal(normalized.plan,'Google AI Ultra');
+ const store=new Map();
+ const extra={localStorage:{getItem:k=>store.get(k)||null,setItem:(k,v)=>store.set(k,String(v))}};
+ const data={providers:[
+  {...normalizeCodex(codex(window(10),window(20,10080))),checkedAt:new Date().toISOString(),stale:false,error:null},
+  {...normalized,checkedAt:new Date().toISOString(),stale:false,error:null}
+ ]};
+ const {ids}=clientHarness(async()=>({ok:true,json:async()=>data}),extra);await settle();
+ const agyKey=ids.quotaKeys.children[1];
+ const tagsBefore=flatten(agyKey).filter(n=>n.attrs?.class==='quota-tag');
+ assert.equal(tagsBefore.length,1);
+ assert.equal(tagsBefore[0].textContent,'AI Ultra');
+ assert.match(text(agyKey),/Gemini 5h 90%/);
+ assert.match(text(agyKey),/Gemini 주간 98%/);
+ assert.match(text(agyKey),/3P 5h 100%/);
+ assert.match(text(agyKey),/3P 주간 21%/);
+ agyKey.onclick();
+ assert.equal(ids.quotaTitle.textContent,'Antigravity (Google AI Ultra) 쿼터');
+ assert.match(text(ids.quotaContent),/구독 플랜: Google AI Ultra/);
+ const pickButtons=flatten(ids.quotaContent).filter(n=>n.attrs?.class?.includes('model-pick-btn'));
+ pickButtons[1].onclick();
+ const tagsAfter=flatten(agyKey).filter(n=>n.attrs?.class==='quota-tag');
+ assert.equal(tagsAfter.length,1);
+ assert.equal(tagsAfter[0].textContent,'AI Ultra');
+ const pairsAfter=flatten(agyKey).filter(n=>n.attrs?.class?.includes('quota-bucket-pair'));
+ assert.equal(pairsAfter[0].attrs.class,'quota-bucket-pair is-secondary');
+ assert.equal(pairsAfter[1].attrs.class,'quota-bucket-pair');
+});
+test('readAgy resolves verified account tier via --log-file and rejects mismatch or stale cache without leaking email',async()=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'agy-tier-test-'));
+ const fakeAgy=path.join(dir,'fake-agy');
+ const accountsFile=path.join(dir,'accounts.json');
+ const usageJson=JSON.stringify({
+  command:{name:'usage',data:{groups:[
+   {name:'Gemini Models',description:'Models within this group: Gemini 4 Neon',buckets:[{window:'5h',remaining_fraction:0.9,reset_time:'2026-11-26T12:42:22Z'},{window:'weekly',remaining_fraction:0.98,reset_time:'2026-12-03T07:42:22Z'}]}
+  ]}}
+ });
+ await writeFile(fakeAgy,`#!/usr/bin/env python3
+import sys
+args = sys.argv[1:]
+if '--log-file' in args:
+ lf = args[args.index('--log-file') + 1]
+ with open(lf, 'w', encoding='utf-8') as f:
+  f.write('I1126 17:26:08 server_oauth.go:221] applyAuthResult: email=active@example.com, authMethod=consumer, quotaProject=\\n')
+print(${JSON.stringify(usageJson)})
+`);
+ await chmod(fakeAgy,0o755);
+ const nowSec=Math.floor(Date.now()/1000);
+ try{
+  await writeFile(accountsFile,JSON.stringify({
+   latest_email:'active@example.com',
+   accounts:{'active@example.com':{email:'active@example.com',plan:'Google AI Ultra',at:nowSec}}
+  }));
+  const beforeTmp=new Set((await readdir(os.tmpdir())).filter(n=>n.startsWith('agy-deck-')));
+  const matched=await readAgy({agyBin:fakeAgy,accountsPath:accountsFile});
+  assert.equal(matched.planType,'Google AI Ultra');
+  assert.doesNotMatch(JSON.stringify(matched),/active@example\.com/);
+  const afterTmp=new Set((await readdir(os.tmpdir())).filter(n=>n.startsWith('agy-deck-')));
+  assert.deepEqual([...afterTmp].filter(n=>!beforeTmp.has(n)),[]);
+
+  await writeFile(accountsFile,JSON.stringify({
+   latest_email:'other@example.com',
+   accounts:{'other@example.com':{email:'other@example.com',plan:'Google AI Pro',at:nowSec}}
+  }));
+  const mismatch=await readAgy({agyBin:fakeAgy,accountsPath:accountsFile});
+  assert.equal(mismatch.planType,null);
+
+  await writeFile(accountsFile,JSON.stringify({
+   latest_email:'active@example.com',
+   accounts:{'active@example.com':{email:'active@example.com',plan:'Google AI Ultra',at:nowSec-10*86400}}
+  }));
+  const stale=await readAgy({agyBin:fakeAgy,accountsPath:accountsFile});
+  assert.equal(stale.planType,null);
+ }finally{
+  await rm(dir,{recursive:true,force:true});
+ }
 });
 test('createQuotaReader force refresh respects cooldown and client refresh button sends ?force=1',async()=>{
  let time=10000,calls=0;

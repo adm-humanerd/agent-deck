@@ -48,11 +48,18 @@ var quotaView=(()=>{
  function cleanModelName(label){
   return (label||'').replace(/\s*\((Low|Medium|High|XHigh)\)/gi,'').trim();
  }
- function shortGroupLabel(label){
+ function compactGroupPrefix(label,multi){
   const s=String(label||'').trim();
   if(/^gemini/i.test(s))return 'Gemini';
-  if(/claude.*gpt/i.test(s))return 'Claude·GPT';
-  return s;
+  if(/claude.*gpt|^3p\b/i.test(s))return '3P';
+  return multi?s:'';
+ }
+ function compactWindowLabel(prefix,label){
+  if(!prefix)return label;
+  return prefix+' '+(label==='5시간'?'5h':label);
+ }
+ function shortPlanLabel(plan){
+  return String(plan||'').trim().replace(/^Google(?:\s+One)?\s+/i,'');
  }
  function name(p){
   const base=p.provider==='codex'?'Codex':'Antigravity';
@@ -129,13 +136,13 @@ var quotaView=(()=>{
   const confirmedAgy=confirmedAgyBuckets(p);
   if(p.provider==='agy'&&confirmedAgy.length){
    const chosen=activeAgyBucket(p);
-   content.append(node('p','덱 키에 표시할 모델 그룹을 선택하세요. 5시간·주간 잔여율은 실제 계정 기준입니다.','hint'));
+   content.append(node('p','기본·아이패드 키에는 두 그룹(4줄)이 함께 표시되며, 좁은 화면에서는 선택한 우선 그룹만 표시됩니다.','hint'));
    for(const b of confirmedAgy){
     const card=node('div',undefined,'quota-group-card');
     const header=node('div',undefined,'model-pick-header');
     header.append(node('h3',b.label));
     const isSelected=chosen?.id===b.id;
-    const btn=node('button',isSelected?'✓ 키에 표시 중':'키에 표시',isSelected?'model-pick-btn active':'model-pick-btn');
+    const btn=node('button',isSelected?'✓ 우선 표시 중':'우선 표시',isSelected?'model-pick-btn active':'model-pick-btn');
     btn.type='button';
     btn.onclick=()=>selectAgyBucket(b);
     header.append(btn);
@@ -183,21 +190,34 @@ var quotaView=(()=>{
   const abnormal=isAbnormalStatus(p);
   const signature=JSON.stringify([p,status(p),abnormal,agyBucket?.id,chosenBucketId,agyModel?.id,chosenId]);
   if(entry.signature===signature)return;
+  const curCls=(entry.button.className||'').split(/\s+/).filter(c=>c&&c!=='is-abnormal');
+  if(abnormal)curCls.push('is-abnormal');
+  entry.button.className=curCls.join(' ');
   const baseName=p.provider==='codex'?'Codex':'Antigravity';
+  const planTag=p.plan?shortPlanLabel(p.plan):'';
   if(p.provider==='agy'&&agyBucket){
    const confirmed=confirmedAgyBuckets(p);
-   const idx=confirmed.findIndex(x=>x.id===agyBucket.id);
-   const windows=bucketWindows(agyBucket).slice(0,2);
-   const tag=shortGroupLabel(agyBucket.label);
+   const visibleBuckets=confirmed.length<=2?confirmed:(confirmed.slice(0,2).some(x=>x.id===agyBucket.id)?confirmed.slice(0,2):[confirmed[0],agyBucket]);
    const head=node('div',undefined,'quota-key-head');
-   head.append(node('strong',baseName),node('span',tag,'quota-tag'));
+   head.append(node('strong',baseName));
+   if(planTag)head.append(node('span',planTag,'quota-tag'));
    const metrics=node('div',undefined,'quota-metrics');
-   metrics.append(...windows.map(([lbl,w])=>gauge(lbl,w,true)));
+   const ariaParts=[];
+   for(const bucket of visibleBuckets){
+    const isSecondary=visibleBuckets.length>1&&bucket.id!==agyBucket.id;
+    const pair=node('div',undefined,'quota-bucket-pair'+(isSecondary?' is-secondary':''));
+    const prefix=compactGroupPrefix(bucket.label,visibleBuckets.length>1);
+    for(const [lbl,w] of bucketWindows(bucket).slice(0,2)){
+     const rowLbl=compactWindowLabel(prefix,lbl);
+     pair.append(gauge(rowLbl,w,true));
+     ariaParts.push(rowLbl+' 잔여 '+(pct(w?.remaining)===null?'—':pct(w?.remaining)+'%'));
+    }
+    metrics.append(pair);
+   }
    const parts=[head,metrics];
    if(abnormal)parts.push(node('small',status(p),'quota-foot'+(p.error||stale(p)?' is-alert':'')));
    entry.button.replaceChildren(...parts);
-   const summary=agyBucket.label+(confirmed.length>1?' ('+(idx+1)+'/'+confirmed.length+')':'');
-   entry.button.setAttribute('aria-label',name(p)+' 쿼터 · '+summary+' · '+windows.map(([lbl,w])=>lbl+' 잔여 '+(pct(w?.remaining)===null?'—':pct(w?.remaining)+'%')).join(' · ')+' · '+status(p)+' · 터치 상세');
+   entry.button.setAttribute('aria-label',name(p)+' 쿼터 · '+ariaParts.join(' · ')+' · '+status(p)+' · 터치 상세');
   }else if(p.provider==='agy'){
    const m=agyModel;
    const cleanName=m?cleanModelName(m.label):'대표 모델';
@@ -207,7 +227,7 @@ var quotaView=(()=>{
    const secondGauge=other?gauge(other.cleanName,other,true):gauge('기간',b?.weekly,true);
    const head=node('div',undefined,'quota-key-head');
    head.append(node('strong',baseName));
-   if(p.plan)head.append(node('span',p.plan,'quota-tag'));
+   if(planTag)head.append(node('span',planTag,'quota-tag'));
    const metrics=node('div',undefined,'quota-metrics');
    metrics.append(gauge(cleanName,m,true),secondGauge);
    const parts=[head,metrics,node('small',summary,'quota-foot')];
@@ -219,7 +239,7 @@ var quotaView=(()=>{
    const summary=(p.buckets.length>1?'공유 한도 1/'+p.buckets.length:'활성계정');
    const head=node('div',undefined,'quota-key-head');
    head.append(node('strong',baseName));
-   if(p.plan)head.append(node('span',p.plan,'quota-tag'));
+   if(planTag)head.append(node('span',planTag,'quota-tag'));
    const metrics=node('div',undefined,'quota-metrics');
    metrics.append(...windows.map(([lbl,w])=>gauge(lbl,w,true)));
    const parts=[head,metrics];

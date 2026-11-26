@@ -1,15 +1,16 @@
-.keys .key.quota-key{align-items:stretch !important;justify-content:space-between !important;text-align:left;gap:6px !important;padding:10px 10px 9px !important;white-space:normal}
+.keys .key.quota-key{container:quota-key / inline-size;align-items:stretch !important;justify-content:space-between !important;text-align:left;gap:5px !important;padding:9px 10px 8px !important;white-space:normal}
 .keys .key.quota-key::before{opacity:.35}
-.quota-key-head{display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:0}
-.quota-key-head strong{font-size:12.5px;line-height:1.15;font-weight:600;color:#f1f0ec;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
-.quota-tag{flex:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 6px;border-radius:999px;border:1px solid #303744;background:#1b2028;color:#b7bbc0;font-size:10px;font-weight:500;line-height:1.35}
-.quota-metrics{display:flex;flex-direction:column;gap:5px;width:100%;min-width:0}
+.quota-key-head{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:5px;width:100%;min-width:0}
+.quota-key-head strong{font-size:12px;line-height:1.15;font-weight:600;color:#f1f0ec;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.quota-tag{flex:none;max-width:58%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 6px;border-radius:999px;border:1px solid #303744;background:#1b2028;color:#b7bbc0;font-size:9.5px;font-weight:500;line-height:1.3}
+.quota-metrics{display:flex;flex-direction:column;gap:6px;width:100%;min-width:0}
+.quota-bucket-pair{display:flex;flex-direction:column;gap:3px;width:100%;min-width:0}
 .quota-foot{font-size:10px;line-height:1.25;color:#aeb4be;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .quota-foot.is-alert{color:#f6bf63}
 .quota-row{display:flex;flex-direction:column;gap:4px;width:100%;font-size:13px;line-height:1.25;color:#f1f0ec;font-variant-numeric:tabular-nums;flex:none}
 .quota-row-head{display:flex;align-items:baseline;justify-content:space-between;gap:6px;width:100%}
 .quota-val{font-weight:600;color:#f1f0ec;font-variant-numeric:tabular-nums}
-.keys .key.quota-key .quota-row{font-size:11px;gap:3px}
+.keys .key.quota-key .quota-row{font-size:10.5px;line-height:1.15;gap:2px}
 .keys .key.quota-key .quota-row-head span:first-child{color:#b7bbc0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .quota-track{height:6px;overflow:hidden;border-radius:999px;background:#1d2129;border:1px solid #2e3440;width:100%;box-sizing:border-box}
 .keys .key.quota-key .quota-track{height:4px;border-color:#2a303a}
@@ -27,4 +28,6 @@
 .model-pick-btn{background:#22262e;color:#e6e9ef;border:1px solid #3a404c;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:600;min-height:44px;white-space:nowrap;cursor:pointer}
 .model-pick-btn:hover{background:#2c313b}
 .model-pick-btn.active{background:#17261f;color:#b9e8ce;border-color:#4b7862}
-@container(max-width:700px){.keys .key.quota-key{gap:4px !important;padding:7px !important}.quota-key-head{gap:2px}.quota-key-head strong{font-size:11px}.quota-tag{font-size:9px;padding:1px 5px}.quota-metrics{gap:3px}.quota-foot{font-size:9px}.keys .key.quota-key .quota-row{font-size:10px;gap:2px}.keys .key.quota-key .quota-track{height:4px}}
+@container quota-key (min-width:160px){.keys .key.quota-key{padding:11px 12px 10px !important;gap:6px !important}.quota-key-head strong{font-size:13px}.quota-tag{font-size:10px;padding:1px 6px}.quota-metrics{gap:8px}.quota-bucket-pair{gap:4px}.keys .key.quota-key .quota-row{font-size:11px;line-height:1.2;gap:2.5px}}
+@container quota-key (max-width:155px){.keys .key.quota-key.is-abnormal .quota-bucket-pair.is-secondary{display:none}}
+@container quota-key (max-width:128px){.keys .key.quota-key{gap:4px !important;padding:7px !important}.quota-bucket-pair.is-secondary{display:none}.quota-key-head{flex-direction:column;align-items:flex-start;gap:2px}.quota-key-head strong{font-size:11px;max-width:100%}.quota-tag{max-width:100%;font-size:9px;padding:1px 5px}.quota-metrics{gap:3px}.quota-foot{font-size:9px}.keys .key.quota-key .quota-row{font-size:10px;gap:2px}}

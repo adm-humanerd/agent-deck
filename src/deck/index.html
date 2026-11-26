@@ -2412,18 +2412,19 @@ body.local #customPresentationGroup .key-preview-tile {
 }
 </style>
 <style data-quota-view>
-.keys .key.quota-key{align-items:stretch !important;justify-content:space-between !important;text-align:left;gap:6px !important;padding:10px 10px 9px !important;white-space:normal}
+.keys .key.quota-key{container:quota-key / inline-size;align-items:stretch !important;justify-content:space-between !important;text-align:left;gap:5px !important;padding:9px 10px 8px !important;white-space:normal}
 .keys .key.quota-key::before{opacity:.35}
-.quota-key-head{display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:0}
-.quota-key-head strong{font-size:12.5px;line-height:1.15;font-weight:600;color:#f1f0ec;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
-.quota-tag{flex:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 6px;border-radius:999px;border:1px solid #303744;background:#1b2028;color:#b7bbc0;font-size:10px;font-weight:500;line-height:1.35}
-.quota-metrics{display:flex;flex-direction:column;gap:5px;width:100%;min-width:0}
+.quota-key-head{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:5px;width:100%;min-width:0}
+.quota-key-head strong{font-size:12px;line-height:1.15;font-weight:600;color:#f1f0ec;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.quota-tag{flex:none;max-width:58%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:1px 6px;border-radius:999px;border:1px solid #303744;background:#1b2028;color:#b7bbc0;font-size:9.5px;font-weight:500;line-height:1.3}
+.quota-metrics{display:flex;flex-direction:column;gap:6px;width:100%;min-width:0}
+.quota-bucket-pair{display:flex;flex-direction:column;gap:3px;width:100%;min-width:0}
 .quota-foot{font-size:10px;line-height:1.25;color:#aeb4be;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .quota-foot.is-alert{color:#f6bf63}
 .quota-row{display:flex;flex-direction:column;gap:4px;width:100%;font-size:13px;line-height:1.25;color:#f1f0ec;font-variant-numeric:tabular-nums;flex:none}
 .quota-row-head{display:flex;align-items:baseline;justify-content:space-between;gap:6px;width:100%}
 .quota-val{font-weight:600;color:#f1f0ec;font-variant-numeric:tabular-nums}
-.keys .key.quota-key .quota-row{font-size:11px;gap:3px}
+.keys .key.quota-key .quota-row{font-size:10.5px;line-height:1.15;gap:2px}
 .keys .key.quota-key .quota-row-head span:first-child{color:#b7bbc0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .quota-track{height:6px;overflow:hidden;border-radius:999px;background:#1d2129;border:1px solid #2e3440;width:100%;box-sizing:border-box}
 .keys .key.quota-key .quota-track{height:4px;border-color:#2a303a}
@@ -2441,7 +2442,9 @@ body.local #customPresentationGroup .key-preview-tile {
 .model-pick-btn{background:#22262e;color:#e6e9ef;border:1px solid #3a404c;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:600;min-height:44px;white-space:nowrap;cursor:pointer}
 .model-pick-btn:hover{background:#2c313b}
 .model-pick-btn.active{background:#17261f;color:#b9e8ce;border-color:#4b7862}
-@container(max-width:700px){.keys .key.quota-key{gap:4px !important;padding:7px !important}.quota-key-head{gap:2px}.quota-key-head strong{font-size:11px}.quota-tag{font-size:9px;padding:1px 5px}.quota-metrics{gap:3px}.quota-foot{font-size:9px}.keys .key.quota-key .quota-row{font-size:10px;gap:2px}.keys .key.quota-key .quota-track{height:4px}}
+@container quota-key (min-width:160px){.keys .key.quota-key{padding:11px 12px 10px !important;gap:6px !important}.quota-key-head strong{font-size:13px}.quota-tag{font-size:10px;padding:1px 6px}.quota-metrics{gap:8px}.quota-bucket-pair{gap:4px}.keys .key.quota-key .quota-row{font-size:11px;line-height:1.2;gap:2.5px}}
+@container quota-key (max-width:155px){.keys .key.quota-key.is-abnormal .quota-bucket-pair.is-secondary{display:none}}
+@container quota-key (max-width:128px){.keys .key.quota-key{gap:4px !important;padding:7px !important}.quota-bucket-pair.is-secondary{display:none}.quota-key-head{flex-direction:column;align-items:flex-start;gap:2px}.quota-key-head strong{font-size:11px;max-width:100%}.quota-tag{max-width:100%;font-size:9px;padding:1px 5px}.quota-metrics{gap:3px}.quota-foot{font-size:9px}.keys .key.quota-key .quota-row{font-size:10px;gap:2px}}
 </style>
 </head>
 <body>
@@ -4989,11 +4992,18 @@ var quotaView=(()=>{
  function cleanModelName(label){
   return (label||'').replace(/\s*\((Low|Medium|High|XHigh)\)/gi,'').trim();
  }
- function shortGroupLabel(label){
+ function compactGroupPrefix(label,multi){
   const s=String(label||'').trim();
   if(/^gemini/i.test(s))return 'Gemini';
-  if(/claude.*gpt/i.test(s))return 'Claude·GPT';
-  return s;
+  if(/claude.*gpt|^3p\b/i.test(s))return '3P';
+  return multi?s:'';
+ }
+ function compactWindowLabel(prefix,label){
+  if(!prefix)return label;
+  return prefix+' '+(label==='5시간'?'5h':label);
+ }
+ function shortPlanLabel(plan){
+  return String(plan||'').trim().replace(/^Google(?:\s+One)?\s+/i,'');
  }
  function name(p){
   const base=p.provider==='codex'?'Codex':'Antigravity';
@@ -5070,13 +5080,13 @@ var quotaView=(()=>{
   const confirmedAgy=confirmedAgyBuckets(p);
   if(p.provider==='agy'&&confirmedAgy.length){
    const chosen=activeAgyBucket(p);
-   content.append(node('p','덱 키에 표시할 모델 그룹을 선택하세요. 5시간·주간 잔여율은 실제 계정 기준입니다.','hint'));
+   content.append(node('p','기본·아이패드 키에는 두 그룹(4줄)이 함께 표시되며, 좁은 화면에서는 선택한 우선 그룹만 표시됩니다.','hint'));
    for(const b of confirmedAgy){
     const card=node('div',undefined,'quota-group-card');
     const header=node('div',undefined,'model-pick-header');
     header.append(node('h3',b.label));
     const isSelected=chosen?.id===b.id;
-    const btn=node('button',isSelected?'✓ 키에 표시 중':'키에 표시',isSelected?'model-pick-btn active':'model-pick-btn');
+    const btn=node('button',isSelected?'✓ 우선 표시 중':'우선 표시',isSelected?'model-pick-btn active':'model-pick-btn');
     btn.type='button';
     btn.onclick=()=>selectAgyBucket(b);
     header.append(btn);
@@ -5124,21 +5134,34 @@ var quotaView=(()=>{
   const abnormal=isAbnormalStatus(p);
   const signature=JSON.stringify([p,status(p),abnormal,agyBucket?.id,chosenBucketId,agyModel?.id,chosenId]);
   if(entry.signature===signature)return;
+  const curCls=(entry.button.className||'').split(/\s+/).filter(c=>c&&c!=='is-abnormal');
+  if(abnormal)curCls.push('is-abnormal');
+  entry.button.className=curCls.join(' ');
   const baseName=p.provider==='codex'?'Codex':'Antigravity';
+  const planTag=p.plan?shortPlanLabel(p.plan):'';
   if(p.provider==='agy'&&agyBucket){
    const confirmed=confirmedAgyBuckets(p);
-   const idx=confirmed.findIndex(x=>x.id===agyBucket.id);
-   const windows=bucketWindows(agyBucket).slice(0,2);
-   const tag=shortGroupLabel(agyBucket.label);
+   const visibleBuckets=confirmed.length<=2?confirmed:(confirmed.slice(0,2).some(x=>x.id===agyBucket.id)?confirmed.slice(0,2):[confirmed[0],agyBucket]);
    const head=node('div',undefined,'quota-key-head');
-   head.append(node('strong',baseName),node('span',tag,'quota-tag'));
+   head.append(node('strong',baseName));
+   if(planTag)head.append(node('span',planTag,'quota-tag'));
    const metrics=node('div',undefined,'quota-metrics');
-   metrics.append(...windows.map(([lbl,w])=>gauge(lbl,w,true)));
+   const ariaParts=[];
+   for(const bucket of visibleBuckets){
+    const isSecondary=visibleBuckets.length>1&&bucket.id!==agyBucket.id;
+    const pair=node('div',undefined,'quota-bucket-pair'+(isSecondary?' is-secondary':''));
+    const prefix=compactGroupPrefix(bucket.label,visibleBuckets.length>1);
+    for(const [lbl,w] of bucketWindows(bucket).slice(0,2)){
+     const rowLbl=compactWindowLabel(prefix,lbl);
+     pair.append(gauge(rowLbl,w,true));
+     ariaParts.push(rowLbl+' 잔여 '+(pct(w?.remaining)===null?'—':pct(w?.remaining)+'%'));
+    }
+    metrics.append(pair);
+   }
    const parts=[head,metrics];
    if(abnormal)parts.push(node('small',status(p),'quota-foot'+(p.error||stale(p)?' is-alert':'')));
    entry.button.replaceChildren(...parts);
-   const summary=agyBucket.label+(confirmed.length>1?' ('+(idx+1)+'/'+confirmed.length+')':'');
-   entry.button.setAttribute('aria-label',name(p)+' 쿼터 · '+summary+' · '+windows.map(([lbl,w])=>lbl+' 잔여 '+(pct(w?.remaining)===null?'—':pct(w?.remaining)+'%')).join(' · ')+' · '+status(p)+' · 터치 상세');
+   entry.button.setAttribute('aria-label',name(p)+' 쿼터 · '+ariaParts.join(' · ')+' · '+status(p)+' · 터치 상세');
   }else if(p.provider==='agy'){
    const m=agyModel;
    const cleanName=m?cleanModelName(m.label):'대표 모델';
@@ -5148,7 +5171,7 @@ var quotaView=(()=>{
    const secondGauge=other?gauge(other.cleanName,other,true):gauge('기간',b?.weekly,true);
    const head=node('div',undefined,'quota-key-head');
    head.append(node('strong',baseName));
-   if(p.plan)head.append(node('span',p.plan,'quota-tag'));
+   if(planTag)head.append(node('span',planTag,'quota-tag'));
    const metrics=node('div',undefined,'quota-metrics');
    metrics.append(gauge(cleanName,m,true),secondGauge);
    const parts=[head,metrics,node('small',summary,'quota-foot')];
@@ -5160,7 +5183,7 @@ var quotaView=(()=>{
    const summary=(p.buckets.length>1?'공유 한도 1/'+p.buckets.length:'활성계정');
    const head=node('div',undefined,'quota-key-head');
    head.append(node('strong',baseName));
-   if(p.plan)head.append(node('span',p.plan,'quota-tag'));
+   if(planTag)head.append(node('span',planTag,'quota-tag'));
    const metrics=node('div',undefined,'quota-metrics');
    metrics.append(...windows.map(([lbl,w])=>gauge(lbl,w,true)));
    const parts=[head,metrics];

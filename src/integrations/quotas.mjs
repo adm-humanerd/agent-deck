@@ -54,7 +54,8 @@ export function normalizeCodex(result) {
 export function normalizeAgy(result) {
  const out=base('agy'), seen=new Set(), seenGroups=new Set(), groupIdMap=new Map();
  const planRaw=result?.planType||result?.userStatus?.planType||result?.plan;
- out.plan=typeof planRaw==='string'&&/^[a-zA-Z0-9_ -]{1,32}$/.test(planRaw)&&!/(token|bearer|secret|csrf)/i.test(planRaw)?planRaw:null;
+ const planTrimmed=typeof planRaw==='string'?planRaw.trim():'';
+ out.plan=/^[a-zA-Z0-9_.+() -]{1,40}$/.test(planTrimmed)&&!/(token|bearer|secret|csrf)/i.test(planTrimmed)?planTrimmed:null;
  const normWin=w=>w&&typeof w==='object'?{remaining:percent(w.remainingFraction,100),resetsAt:reset(w.resetTime)}:emptyWindow();
  for(const g of Array.isArray(result?.usageGroups)?result.usageGroups:[]){
   if(!g||typeof g!=='object')continue;
@@ -112,24 +113,70 @@ export function readCodex({command='codex',timeout=8000,spawnProcess=spawn}={}) 
  });
 }
 // Import only the read-side helper, not main/parse_quota_data/save_state. No cache, SVG or CSRF writes.
-const agyRead = `import importlib.util,json,os,subprocess,sys
+const agyRead = `import importlib.util,json,os,re,subprocess,sys,tempfile,time
 sys.dont_write_bytecode=True
 d=None
-try:
- p=os.path.expanduser('~/agy-quota-guard/quota_guard.py')
- s=importlib.util.spec_from_file_location('deck_quota_guard',p)
- m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
- d,_,_=m.get_active_user_status()
-except Exception: pass
+if not os.environ.get('AGENT_DECK_AGY_BIN'):
+ try:
+  p=os.path.expanduser('~/agy-quota-guard/quota_guard.py')
+  s=importlib.util.spec_from_file_location('deck_quota_guard',p)
+  m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+  d,_,_=m.get_active_user_status()
+ except Exception: pass
 if not d:
  try:
-  b=os.path.expanduser('~/.local/bin/agy')
-  cmd=[b if os.path.exists(b) else 'agy','-p','/usage','--output-format','json']
-  out=subprocess.check_output(cmd,timeout=12,stderr=subprocess.DEVNULL).decode()
+  b=os.environ.get('AGENT_DECK_AGY_BIN') or os.path.expanduser('~/.local/bin/agy')
+  exe=b if os.path.exists(b) else 'agy'
+  active_email=None
+  fd,lf=tempfile.mkstemp(prefix='agy-deck-',suffix='.log')
+  os.close(fd)
+  try:
+   try:
+    out=subprocess.check_output([exe,'--log-file',lf,'-p','/usage','--output-format','json'],timeout=12,stderr=subprocess.DEVNULL).decode()
+   except subprocess.CalledProcessError:
+    out=subprocess.check_output([exe,'-p','/usage','--output-format','json'],timeout=12,stderr=subprocess.DEVNULL).decode()
+   try:
+    with open(lf,'rb') as f:
+     f.seek(0,os.SEEK_END)
+     sz=f.tell()
+     f.seek(max(0,sz-131072))
+     log_text=f.read().decode('utf-8','ignore')
+    matches=re.findall(r'applyAuthResult:\\s*email=([^,\\s]+)',log_text)
+    if matches: active_email=matches[-1].strip().lower()
+   except Exception: pass
+  finally:
+   try: os.unlink(lf)
+   except OSError: pass
   j=json.loads(out)
+  cdata=j.get('command',{}).get('data',{})
+  cli_plan=cdata.get('plan_tier') or cdata.get('planType') or cdata.get('tier') or j.get('plan_tier') or j.get('planType')
+  if not cli_plan:
+   try:
+    af=os.path.expanduser(os.environ.get('AGENT_DECK_AGY_ACCOUNTS_PATH') or '~/.cache/herdr-modulor/accounts.json')
+    with open(af,'r',encoding='utf-8') as f:
+     store=json.load(f)
+    if isinstance(store,dict) and isinstance(store.get('accounts'),dict):
+     accts=store['accounts']
+     now=time.time()
+     acct=None
+     max_age=7*86400 if active_email else 3600
+     target_email=active_email
+     if not target_email and isinstance(store.get('latest_email'),str):
+      target_email=store['latest_email'].strip().lower()
+     if target_email:
+      acct=accts.get(target_email)
+      if not isinstance(acct,dict):
+       for k,v in accts.items():
+        if isinstance(k,str) and k.strip().lower()==target_email and isinstance(v,dict):
+         acct=v
+         break
+     if isinstance(acct,dict) and isinstance(acct.get('at'),(int,float)) and -300<=now-acct['at']<=max_age:
+      p=acct.get('plan')
+      if isinstance(p,str) and p.strip(): cli_plan=p.strip()
+   except Exception: pass
   models=[]
   groups=[]
-  for idx,g in enumerate(j.get('command',{}).get('data',{}).get('groups',[])):
+  for idx,g in enumerate(cdata.get('groups',[])):
    desc=g.get('description','')
    gname=g.get('name') or f'Group {idx+1}'
    m_names=[]
@@ -153,17 +200,21 @@ if not d:
    if qinfo:
     for mn in m_names:
      models.append({'label':mn,'modelId':mn,'groupId':gid,'period':period,'quotaInfo':qinfo})
-  if models or groups: d={'usageGroups':groups,'userStatus':{'cascadeModelConfigData':{'clientModelConfigs':models}}}
+  if models or groups: d={'planType':cli_plan,'usageGroups':groups,'userStatus':{'cascadeModelConfigData':{'clientModelConfigs':models}}}
  except Exception: pass
 if not d: raise RuntimeError('unavailable')
 us=d.get('userStatus') or {}
 plan=d.get('planType') or us.get('planType') or d.get('plan') or (us.get('userTier') or {}).get('name') or ((us.get('planStatus') or {}).get('planInfo') or {}).get('planName')
 models=us.get('cascadeModelConfigData',{}).get('clientModelConfigs',[])
 print(json.dumps({'planType':plan,'usageGroups':d.get('usageGroups'),'userStatus':{'cascadeModelConfigData':{'clientModelConfigs':[{'label':x.get('label'),'modelId':x.get('modelId'),'groupId':x.get('groupId'),'period':x.get('period'),'quotaInfo':x.get('quotaInfo')} for x in models]}}}))`;
-export function readAgy({timeout=15000,spawnProcess=spawn}={}) {
+export function readAgy({timeout=15000,spawnProcess=spawn,agyBin,accountsPath}={}) {
  const env={...process.env,HOME:homedir(),PYTHONDONTWRITEBYTECODE:'1'};
  // The original helper supports an environment address. Never send CSRF outside loopback.
  if(env.ANTIGRAVITY_LS_ADDRESS&&!/^127\.0\.0\.1:\d{1,5}$/.test(env.ANTIGRAVITY_LS_ADDRESS))delete env.ANTIGRAVITY_LS_ADDRESS;
+ delete env.AGENT_DECK_AGY_BIN;
+ delete env.AGENT_DECK_AGY_ACCOUNTS_PATH;
+ if(typeof agyBin==='string'&&agyBin)env.AGENT_DECK_AGY_BIN=agyBin;
+ if(typeof accountsPath==='string'&&accountsPath)env.AGENT_DECK_AGY_ACCOUNTS_PATH=accountsPath;
  return new Promise((resolve,reject)=>{
   const child=spawnProcess('/usr/bin/python3',['-B','-c',agyRead],{env,detached:true,stdio:['ignore','pipe','ignore']});
   let text='',done=false;
