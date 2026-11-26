@@ -47,7 +47,7 @@ macOS 외 OS(Windows/Linux)에서는 macOS 앱·단축어·시스템 제어 및 
 - **앱 URL 스킴(`appUrl`) 및 웹 URL(`hostUrl`)**: `raycast://`, `obsidian://`, `slack://`, `vscode://` 같은 앱 URL 스킴이나 `http:`/`https:` 웹 주소를 호스트 OS에 전달합니다.
 - 명시한 셸과 절대 작업 폴더에서 스크립트를 실행합니다 (`hostProcess`).
 - 검증된 명시적 수신기에 literal text 또는 제한된 키 조합을 보냅니다 (`sessionText`/`keyCombo`).
-- 선택적으로 Herdr/Reason 세션과 Codex/Antigravity 활성계정 쿼터를 표시합니다. 일반 맥 제어 및 호스트 동작에 이 통합들은 필요하지 않습니다.
+- **실시간 AI 쿼터 키 (`quota:codex`, `quota:agy`)**: 선택적으로 Herdr/Reason 세션과 함께 Codex·Antigravity 활성계정 쿼터 잔여율 및 확인된 구독 티어 배지(예: `Free`, `Pro`, `AI Ultra`)를 표시합니다. Antigravity 키는 기본·태블릿 크기에서 `Gemini`(5h·주간)와 `3P`(Claude·GPT, 5h·주간) 4줄 게이지를 2+2로 함께 보여주며, 좁은 프리뷰 키(`<= 128px`)에서는 선택한 우선 그룹 2줄로 자동 축약합니다. 일반 맥 제어 및 호스트 동작에 이 통합들은 필요하지 않습니다.
 - 작성한 15개 좌표를 유지합니다. **전체 세션 뱅크** 키는 별도의 12개 세션 + 돌아가기/이전/다음 뱅크를 열며, 사용자 키를 이동하거나 덮어쓰지 않습니다.
 
 PC 미리보기·저장·가져오기는 실행하지 않습니다. 원격 기기는 executable payload를 작성하지 못하며 저장된 ID/revision과 서버 발급 문맥·일회용 nonce로만 실행합니다. 앱/단축어 목록 조회(`/api/actions/mac-catalog`)와 아이콘 추출(`/api/actions/mac-app-icon`)도 PC localhost 전용입니다. 내장 승인 응답은 별도의 최신 ticket·원문 검사를 유지합니다. 오프라인 큐, 자동 재대상 지정, 자동 승인, 불확실한 실행의 자동 재시도는 없습니다.
@@ -76,7 +76,7 @@ PC 미리보기·저장·가져오기는 실행하지 않습니다. 원격 기�
 | `AGENT_DECK_RECEIVERS` | 절대 경로의 수신기 JSON 파일 |
 | `AGENT_DECK_TMUX` | 절대 경로의 tmux 실행 파일; 생략하면 PATH 검색 |
 
-없는 통합은 사용 불가로 표시합니다. 프로세스 발견·창 제목·현재 포커스는 수신기 신원이나 준비 상태의 증거가 아닙니다. Codex 쿼터는 로컬 `codex app-server`의 활성계정을 조회합니다. Antigravity는 선택적 로컬 `~/agy-quota-guard/quota_guard.py` 읽기 도우미 또는 `agy /usage` CLI에 의존하며, 도구 버전에 따라 조회할 수 없을 수 있습니다. 해당 도구는 포함하지 않습니다. 날짜 없는 디스크 쿼터 캐시를 최신 조회로 사용하지 않고, 알 수 없는 플랜·기간·잔여량은 추정하지 않습니다. 실패 시 이전 값은 오류·stale로 표시합니다. 전체 계정 조회는 지원하지 않습니다.
+없는 통합은 사용 불가로 표시합니다. 프로세스 발견·창 제목·현재 포커스는 수신기 신원이나 준비 상태의 증거가 아닙니다. Codex 쿼터는 로컬 `codex app-server`의 활성계정을 조회합니다. Antigravity는 선택적 로컬 `~/agy-quota-guard/quota_guard.py` 읽기 도우미 또는 공식 `agy -p /usage --output-format json` CLI에 의존하며, `agy /usage` 단독 응답에 구독 티어가 없을 경우 해당 실행의 인증 이메일과 일치하고 최근 타임스탬프가 확인된 로컬 statusLine 계정 기록(`~/.cache/herdr-modulor/accounts.json`)에서만 티어를 보강합니다(이메일 불일치·만료 기록은 거부하며 이메일 원문은 외부로 내보내지 않음). 해당 외부 도구들은 포함하지 않습니다. 날짜 없는 디스크 쿼터 캐시를 최신 조회로 사용하지 않고, 미확인 플랜·기간·잔여량은 추정하지 않으며(`plan: null`일 때 티어 배지 생략), 조회 실패 시 이전 값은 오류·stale로 표시합니다. 다중계정 전체 조회는 지원하지 않습니다.
 
 ### 명시적 세션 수신기
 
